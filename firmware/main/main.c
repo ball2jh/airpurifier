@@ -167,10 +167,14 @@ void app_main(void)
         // TWDT not initialized yet, initialize it
         ret = esp_task_wdt_init(&wdt_config);
         if (ret != ESP_OK) {
-            ESP_LOGW(TAG, "Failed to init TWDT: %s", esp_err_to_name(ret));
+            ESP_LOGE(TAG, "Failed to init TWDT: %s — using sdkconfig default timeout", esp_err_to_name(ret));
         }
     } else if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to reconfigure TWDT: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to reconfigure TWDT: %s — using sdkconfig default timeout", esp_err_to_name(ret));
+    }
+
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "Watchdog configured: %ds timeout", WATCHDOG_TIMEOUT_S);
     }
 
     // Subscribe main task to watchdog
@@ -179,8 +183,6 @@ void app_main(void)
         // ESP_ERR_INVALID_ARG means task already subscribed, which is fine
         ESP_LOGW(TAG, "Failed to add task to TWDT: %s", esp_err_to_name(ret));
     }
-
-    ESP_LOGI(TAG, "Watchdog configured: %ds timeout", WATCHDOG_TIMEOUT_S);
 
     // Initialize fan controller
     ret = fan_controller_init();
@@ -203,6 +205,9 @@ void app_main(void)
         return;
     }
 
+    // Feed watchdog before WiFi/NTP waits which can take 30s+
+    esp_task_wdt_reset();
+
     // Initialize WiFi
     ret = wifi_init();
     if (ret != ESP_OK) {
@@ -217,6 +222,9 @@ void app_main(void)
         ESP_LOGW(TAG, "WiFi connection timeout - continuing anyway");
     }
 
+    // Feed watchdog after WiFi wait, before NTP wait
+    esp_task_wdt_reset();
+
     // Initialize NTP time sync (requires WiFi)
     ret = time_sync_init();
     if (ret == ESP_OK) {
@@ -228,6 +236,9 @@ void app_main(void)
     } else {
         ESP_LOGW(TAG, "Time sync init failed - using uptime timestamps");
     }
+
+    // Feed watchdog after NTP wait
+    esp_task_wdt_reset();
 
     // Initialize mDNS for local network discovery
     ret = mdns_init();
@@ -325,6 +336,9 @@ void app_main(void)
         if (loop_count % HEALTH_LOG_INTERVAL == 0) {
             log_health_status();
         }
+
+        // Feed watchdog between I2C operations to avoid timeout during retry-heavy cycles
+        esp_task_wdt_reset();
 
         // Periodic device status register check (~every 30s)
         if (loop_count % 15 == 7) {

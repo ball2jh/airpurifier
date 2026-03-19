@@ -18,6 +18,7 @@
 #include "driver/ledc.h"
 #include "driver/pulse_cnt.h"
 #include "driver/gptimer.h"
+#include "hal/pcnt_ll.h"
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_check.h"
@@ -76,6 +77,7 @@ static const char *TAG = "fan_ctrl";
 // =============================================================================
 
 static pcnt_unit_handle_t pcnt_unit = NULL;
+static int pcnt_unit_id = -1;  // Hardware unit number for IRAM-safe LL access in ISR
 static gptimer_handle_t gptimer = NULL;
 static uint8_t current_duty = 0;
 static atomic_uint_fast32_t current_rpm = 0;
@@ -104,9 +106,9 @@ static int64_t manual_mode_start_us = 0;  // Timestamp when manual mode was ente
  */
 static bool IRAM_ATTR rpm_timer_isr(gptimer_handle_t timer, const gptimer_alarm_event_data_t *edata, void *user_ctx)
 {
-    int pulse_count = 0;
-    pcnt_unit_get_count(pcnt_unit, &pulse_count);
-    pcnt_unit_clear_count(pcnt_unit);
+    // Use IRAM-safe LL register access instead of driver API (which may live in flash)
+    int pulse_count = pcnt_ll_get_count(&PCNT, pcnt_unit_id);
+    pcnt_ll_clear_count(&PCNT, pcnt_unit_id);
 
     // Calculate RPM: (pulses per second * 60) / pulses per revolution
     uint32_t rpm = (pulse_count * 60) / PULSES_PER_REV;
@@ -185,6 +187,7 @@ esp_err_t fan_controller_init(void)
         .low_limit  = -32768,
     };
     ESP_RETURN_ON_ERROR(pcnt_new_unit(&pcnt_config, &pcnt_unit), TAG, "PCNT unit create failed");
+    pcnt_unit_id = 0;  // First (and only) PCNT allocation — unit 0 guaranteed
 
     pcnt_glitch_filter_config_t filter_config = {
         .max_glitch_ns = GLITCH_FILTER_NS,
