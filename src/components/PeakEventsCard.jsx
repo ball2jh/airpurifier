@@ -2,9 +2,9 @@ import { Card } from '@/components/ui/card';
 import { TIERS } from './HistoryChart';
 
 const PM25_THRESHOLDS = [
-  { level: 12, label: 'Moderate', color: 'yellow', bgClass: 'bg-yellow', textClass: 'text-yellow' },
-  { level: 35, label: 'USG', color: 'orange', bgClass: 'bg-orange', textClass: 'text-orange' },
-  { level: 55, label: 'Unhealthy', color: 'red', bgClass: 'bg-red', textClass: 'text-red' },
+  { level: 12.0, label: 'Moderate', color: 'yellow', bgClass: 'bg-yellow', textClass: 'text-yellow' },
+  { level: 35.4, label: 'USG', color: 'orange', bgClass: 'bg-orange', textClass: 'text-orange' },
+  { level: 55.4, label: 'Unhealthy', color: 'red', bgClass: 'bg-red', textClass: 'text-red' },
 ];
 
 function formatDuration(seconds) {

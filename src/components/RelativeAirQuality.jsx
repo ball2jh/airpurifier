@@ -11,25 +11,29 @@ const TIMESPAN_OPTIONS = [
   { key: 'all', label: 'All', tier: 'archive' },
 ];
 
-// Calculate percentile of a value within a sorted array
+// Calculate percentile of a value within a sorted array using midpoint method
 function getPercentile(sortedValues, value) {
   if (sortedValues.length === 0 || value == null) return null;
 
-  // Count how many values are less than the current value
-  let count = 0;
+  let below = 0, equal = 0;
   for (const v of sortedValues) {
-    if (v < value) count++;
+    if (v < value) below++;
+    else if (v === value) equal++;
     else break; // Array is sorted, so we can stop early
   }
 
-  return (count / sortedValues.length) * 100;
+  return ((below + 0.5 * equal) / sortedValues.length) * 100;
 }
 
-// Calculate specific percentile value from sorted array
+// Calculate specific percentile value from sorted array with linear interpolation
 function percentileValue(sortedValues, percentile) {
   if (sortedValues.length === 0) return null;
-  const index = Math.floor((percentile / 100) * (sortedValues.length - 1));
-  return sortedValues[index];
+  const pos = (percentile / 100) * (sortedValues.length - 1);
+  const lower = Math.floor(pos);
+  const upper = Math.ceil(pos);
+  if (lower === upper) return sortedValues[lower];
+  const frac = pos - lower;
+  return sortedValues[lower] * (1 - frac) + sortedValues[upper] * frac;
 }
 
 // Get status based on percentile (for air quality, lower is better)

@@ -45,8 +45,13 @@ function compareMetric(currentSamples, previousSamples, metricKey, unit) {
   const currentAvg = calculateAverage(currentSamples, metricKey, unit);
   const previousAvg = calculateAverage(previousSamples, metricKey, unit);
 
-  if (currentAvg == null || previousAvg == null || previousAvg === 0) {
+  if (currentAvg == null || previousAvg == null) {
     return null;
+  }
+
+  if (previousAvg === 0) {
+    if (currentAvg === 0) return { currentAvg, previousAvg, change: 0, direction: 'stable' };
+    return { currentAvg, previousAvg, change: 100, direction: 'up' };
   }
 
   const change = ((currentAvg - previousAvg) / previousAvg) * 100;
@@ -68,10 +73,10 @@ function isImprovement(metricKey, direction) {
   return null;
 }
 
-export default function PeriodComparisonCard({ archiveSamples = [], visibleMetrics = [], tier }) {
+export default function PeriodComparisonCard({ samples = [], visibleMetrics = [], tier }) {
   const { unit: tempUnitValue } = useTemperatureUnit();
   const tierInfo = TIERS.find(t => t.key === tier);
-  const { current, previous } = splitPeriods(archiveSamples, tier);
+  const { current, previous } = splitPeriods(samples, tier);
 
   const hasPreviousData = previous.length > 0;
 

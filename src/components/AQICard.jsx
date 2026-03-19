@@ -17,6 +17,9 @@ const AQI_BREAKPOINTS = [
 export function calculateAQI(pm25) {
   if (pm25 == null || pm25 < 0) return null;
 
+  // Truncate to 1 decimal place per EPA spec (breakpoints are designed for truncated values)
+  pm25 = Math.floor(pm25 * 10) / 10;
+
   // Find the appropriate breakpoint
   const bp = AQI_BREAKPOINTS.find(b => pm25 >= b.cLow && pm25 <= b.cHigh);
 
@@ -30,17 +33,19 @@ export function calculateAQI(pm25) {
   return { aqi, ...bp };
 }
 
-function getTrend(samples, currentValue) {
-  if (!samples || samples.length < 5 || currentValue == null) return null;
+function getTrend(samples) {
+  if (!samples || samples.length < 10) return null;
   const values = samples.map(s => s?.pm2_5).filter(v => v != null);
-  if (values.length < 5) return null;
-  const oldValues = values.slice(0, Math.floor(values.length / 2));
-  const oldAvg = oldValues.reduce((a, b) => a + b, 0) / oldValues.length;
+  if (values.length < 10) return null;
+  const halfLen = Math.floor(values.length / 2);
+  const oldAvg = values.slice(0, halfLen).reduce((a, b) => a + b, 0) / halfLen;
+  const newAvg = values.slice(-halfLen).reduce((a, b) => a + b, 0) / halfLen;
   if (oldAvg === 0) return null;
-  const change = ((currentValue - oldAvg) / oldAvg) * 100;
-  if (Math.abs(change) < 3) return { direction: 'stable', percent: 0 };
-  if (change > 0) return { direction: 'up', percent: Math.round(change) };
-  return { direction: 'down', percent: Math.round(Math.abs(change)) };
+  const change = ((newAvg - oldAvg) / oldAvg) * 100;
+  if (Math.abs(change) < 5) return { direction: 'stable', percent: 0 };
+  return change > 0
+    ? { direction: 'up', percent: Math.round(change) }
+    : { direction: 'down', percent: Math.round(Math.abs(change)) };
 }
 
 function Sparkline({ samples, color }) {
@@ -143,7 +148,7 @@ function Sparkline({ samples, color }) {
 
 export default function AQICard({ pm25, samples, onClick, onPM25Click }) {
   const aqiData = calculateAQI(pm25);
-  const trend = useMemo(() => getTrend(samples, pm25), [samples, pm25]);
+  const trend = useMemo(() => getTrend(samples), [samples]);
 
   // Progress bar: 0-500 AQI scale, but cap visual at 300 for better UX
   const percent = aqiData ? Math.min(100, (aqiData.aqi / 300) * 100) : 0;

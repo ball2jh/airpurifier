@@ -1,12 +1,15 @@
 import { Card } from '@/components/ui/card';
 import { ALL_METRICS, TIERS } from './HistoryChart';
 import { useTemperatureUnit, convertTemp } from '@/utils/temperature';
+import { calculateAQI } from './AQICard';
 
 function calculateStats(samples, metricKey, tempUnit) {
   const values = samples
-    .map(s => metricKey === 'temperature' && s.temperature != null
-      ? convertTemp(s.temperature, tempUnit)
-      : s[metricKey])
+    .map(s => {
+      if (metricKey === 'aqi') return calculateAQI(s.pm2_5)?.aqi;
+      if (metricKey === 'temperature' && s.temperature != null) return convertTemp(s.temperature, tempUnit);
+      return s[metricKey];
+    })
     .filter(v => v != null && !isNaN(v));
 
   if (values.length === 0) return null;

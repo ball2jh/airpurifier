@@ -473,7 +473,7 @@ function Dashboard() {
               tier={historyTier}
             />
             <PeriodComparisonCard
-              archiveSamples={archiveData?.samples || []}
+              samples={historyData?.samples || []}
               visibleMetrics={visibleMetrics}
               tier={historyTier}
             />
