@@ -113,9 +113,10 @@ static bool IRAM_ATTR rpm_timer_isr(gptimer_handle_t timer, const gptimer_alarm_
     atomic_store(&current_rpm, rpm);
 
     // Handle startup grace period (decremented each ISR tick)
+    // Use CAS to avoid race with fan_set_speed_duty() setting a new grace period
     uint32_t grace = atomic_load(&startup_grace_countdown);
     if (grace > 0) {
-        atomic_store(&startup_grace_countdown, grace - 1);
+        atomic_compare_exchange_strong(&startup_grace_countdown, &grace, grace - 1);
     }
 
     // Stall detection logic (disabled during startup grace period)

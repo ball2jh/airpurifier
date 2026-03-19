@@ -157,6 +157,14 @@ static void ota_task(void *pvParameter)
             goto cleanup;
         }
 
+        // Validate download size against Content-Length
+        if (total_written + read_len > content_length) {
+            ESP_LOGE(TAG, "Received more data than expected (%d > %d)",
+                     total_written + read_len, content_length);
+            set_status(OTA_STATE_FAILED, 0, "Download size mismatch");
+            goto cleanup;
+        }
+
         // Write to flash
         err = esp_ota_write(ota_handle, buffer, read_len);
         if (err != ESP_OK) {
