@@ -459,7 +459,7 @@ export default function HistoryChart({ tier, setTier, visibleMetrics, setVisible
       {/* Chart */}
       {hasData && (
         <ResponsiveContainer width="100%" height={chartHeight}>
-          <ComposedChart data={chartData} title="Air quality history over time" margin={{ top: 5, right: 5, bottom: 5, left: windowWidth < 640 ? -5 : -10 }}>
+          <ComposedChart data={chartData} margin={{ top: 5, right: 5, bottom: 5, left: windowWidth < 640 ? -5 : -10 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#313244" />
             <XAxis
               dataKey="timestamp"
