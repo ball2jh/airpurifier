@@ -610,7 +610,7 @@ export default function FanControl() {
           <h3 className="text-sm font-medium text-text mb-1">PWM vs RPM</h3>
           <p className="text-xs text-overlay mb-4">Arctic P14 Pro @ 12V</p>
           <ResponsiveContainer width="100%" height={windowWidth < 640 ? 180 : 220}>
-            <LineChart data={PWM_CURVE_DATA} title="Fan PWM to RPM response curve" margin={{ top: 10, right: 10, bottom: 0, left: -10 }}>
+            <LineChart data={PWM_CURVE_DATA} title="Fan PWM to RPM response curve" margin={{ top: 10, right: 10, bottom: 15, left: -10 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#313244" />
               <XAxis
                 dataKey="pwm"
@@ -705,13 +705,13 @@ export default function FanControl() {
           <h3 className="text-sm font-medium text-text mb-1">Pressure vs Airflow</h3>
           <p className="text-xs text-overlay mb-4">Performance at {rpm > 0 ? `${Math.round((rpm / 2472) * 100)}%` : 'max'} speed</p>
           <ResponsiveContainer width="100%" height={windowWidth < 640 ? 180 : 220}>
-            <LineChart data={PQ_CURVE_DATA} title="Fan pressure versus airflow curve" margin={{ top: 10, right: 10, bottom: 0, left: -10 }}>
+            <LineChart data={PQ_CURVE_DATA} title="Fan pressure versus airflow curve" margin={{ top: 10, right: 10, bottom: 15, left: -10 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#313244" />
               <XAxis
                 dataKey="cfm"
                 stroke="#6c7086"
                 tick={{ fontSize: 10 }}
-                label={{ value: 'CFM', position: 'bottom', fontSize: 10, fill: '#6c7086', offset: -5 }}
+                label={{ value: 'CFM', position: 'bottom', fontSize: 10, fill: '#6c7086', offset: 0 }}
               />
               <YAxis
                 stroke="#6c7086"
