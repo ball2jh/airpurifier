@@ -1,6 +1,6 @@
-# airpurifier
+# firmware
 
-An ESP32-based air quality monitor and fan controller built with ESP-IDF v5.5. Designed for **2+ years of unattended operation** with automatic error recovery, OTA updates, and a REST API for monitoring and control. See [airpurifier-ui](https://github.com/ball2jh/airpurifier-ui) for the web dashboard.
+ESP32 firmware for the [airpurifier](../README.md) system. Built with ESP-IDF v5.5, designed for **2+ years of unattended operation** with automatic error recovery, OTA updates, and a REST API for monitoring and control.
 
 Reads air quality data from a **Sensirion SEN55** sensor (PM1.0, PM2.5, PM4.0, PM10, temperature, humidity, VOC, NOx) and automatically adjusts PWM fan speed based on particulate levels.
 
@@ -40,11 +40,10 @@ ESP32 GPIO 22  <->  SEN55 SCL (external 10K pull-up)
 ### Setup
 
 ```bash
-# Clone this repo
-git clone https://github.com/ball2jh/airpurifier.git
-cd airpurifier
+# From the repo root
+cd firmware
 
-# Clone ESP-IDF into the project (or symlink your existing installation)
+# Clone ESP-IDF into the firmware directory (or symlink your existing installation)
 git clone --recursive https://github.com/espressif/esp-idf.git -b v5.5
 ./esp-idf/install.sh
 
@@ -174,13 +173,6 @@ main/
 partitions.csv       Custom partition table
 sdkconfig            ESP-IDF build configuration
 ```
-
-## Related Projects
-
-| Repository | Description |
-|------------|-------------|
-| [airpurifier-collector](https://github.com/ball2jh/airpurifier-collector) | Host-side history collector — long-term SQLite storage and archive API |
-| [airpurifier-ui](https://github.com/ball2jh/airpurifier-ui) | Web dashboard — real-time monitoring and history charts |
 
 ## License
 

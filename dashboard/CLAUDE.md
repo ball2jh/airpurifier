@@ -20,10 +20,10 @@ Use **bun**, not npm/yarn/pnpm. All commands should use `bun` (e.g., `bun instal
 
 ## ESP32 Firmware
 
-The companion ESP32 firmware lives at `../esp32/`. To build and flash:
+The companion ESP32 firmware lives at `../firmware/`. To build and flash:
 
 ```bash
-cd ../esp32
+cd ../firmware
 . ./esp-idf/export.sh
 idf.py build
 idf.py -p /dev/ttyUSB0 flash

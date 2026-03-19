@@ -1,16 +1,30 @@
-# Build output
-build/
-sdkconfig.old
+# === Firmware (ESP-IDF) ===
+firmware/build/
+firmware/sdkconfig.old
+firmware/esp-idf/
+firmware/managed_components/
+firmware/dependencies.lock
+firmware/main/wifi_config.h
 
-# ESP-IDF framework (clone separately per setup instructions)
-esp-idf/
+# === Dashboard (React/Vite) ===
+dashboard/node_modules/
+dashboard/dist/
+dashboard/dist-ssr/
+dashboard/.env
+dashboard/.env.*
+!dashboard/.env.example
+dashboard/logs/
+dashboard/*.log
+dashboard/*.local
 
-# ESP-IDF managed components (downloaded dependencies)
-managed_components/
-dependencies.lock
+# === Collector (Bun/Express) ===
+collector/node_modules/
+collector/*.db
+collector/*.db-shm
+collector/*.db-wal
+collector/.env
 
-# WiFi credentials - keep private!
-main/wifi_config.h
+# === Shared ===
 
 # Python virtual environment
 .venv/
@@ -23,11 +37,15 @@ main/wifi_config.h
 *.swp
 *.swo
 *~
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
 
 # Claude Code
 .claude/
 .claudeignore
-CLAUDE.md
 
-# macOS
+# OS files
 .DS_Store
+Thumbs.db
