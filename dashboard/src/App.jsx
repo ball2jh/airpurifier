@@ -12,7 +12,7 @@ import HistoryChart, { TIERS } from './components/HistoryChart';
 import RelativeAirQuality from './components/RelativeAirQuality';
 import StatisticsSummaryCard from './components/StatisticsSummaryCard';
 import PeakEventsCard from './components/PeakEventsCard';
-import PeriodComparisonCard from './components/PeriodComparisonCard';
+import PeriodComparisonCard, { TIER_DURATIONS } from './components/PeriodComparisonCard';
 import SystemInfo from './components/SystemInfo';
 import DataManagement from './components/DataManagement';
 import MetricModal from './components/MetricModal';
@@ -296,6 +296,21 @@ function Dashboard() {
     refetchOnWindowFocus: false,
   });
 
+  // Separate query for PeriodComparisonCard: fetches 2x tier duration so splitPeriods() has a previous period
+  const comparisonDuration = TIER_DURATIONS[historyTier] || 0;
+  const { data: comparisonData } = useQuery({
+    queryKey: ['comparison', historyTier],
+    queryFn: () => {
+      const now = Math.floor(Date.now() / 1000);
+      const from = now - comparisonDuration * 2;
+      const resolution = Math.max(tierConfig.resolution, Math.floor(comparisonDuration / 100));
+      return getArchiveQuery(from, now, resolution);
+    },
+    enabled: !!tierConfig && comparisonDuration > 0,
+    refetchInterval: 30000,
+    refetchOnWindowFocus: false,
+  });
+
   // ESP32 tier resolution for non-archive tiers
   const apiTier = tierConfig?.apiKey || historyTier;
   const esp32DataRaw = allHistory?.[apiTier] || null;
@@ -399,7 +414,7 @@ function Dashboard() {
     }`;
 
   return (
-    <div className="min-h-screen p-4 pb-12 md:p-6 lg:p-8 max-w-5xl lg:max-w-6xl mx-auto overflow-x-hidden">
+    <div className="min-h-screen flex flex-col p-4 pb-12 md:p-6 lg:p-8 max-w-5xl lg:max-w-6xl xl:max-w-screen-xl mx-auto overflow-x-hidden">
       <header className="flex items-center justify-between mb-6 gap-3">
         <div className="flex items-center gap-2">
           <h1 className="text-base md:text-xl font-semibold text-text truncate">Air Purifier</h1>
@@ -433,6 +448,7 @@ function Dashboard() {
         </button>
       </header>
 
+      <div className="flex-1">
       {view === 'dashboard' && (
         <main className="space-y-4">
           {/* Hero: AQI with integrated PM2.5 */}
@@ -508,7 +524,7 @@ function Dashboard() {
               tier={historyTier}
             />
             <PeriodComparisonCard
-              samples={historyData?.samples || []}
+              samples={comparisonData?.samples || historyData?.samples || []}
               visibleMetrics={visibleMetrics}
               tier={historyTier}
             />
@@ -527,8 +543,9 @@ function Dashboard() {
           <SettingsPanel health={health} />
         </main>
       )}
+      </div>
 
-      <footer className="mt-6 sm:mt-10 py-3 sm:py-5 border-t border-surface-1">
+      <footer className="mt-auto pt-6 sm:pt-10 py-3 sm:py-5 border-t border-surface-1">
         <div className="flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-overlay">
           <span>© {new Date().getFullYear()} Nettarion LLC</span>
           <span>Air Purifier</span>

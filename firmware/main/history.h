@@ -13,7 +13,7 @@
  * - Medium:  10 min resolution, 24 hours
  * - Coarse:  1 hour resolution, 7 days
  * - Daily:   6 hour resolution, 30 days
- * - Archive: 24 hour resolution, 1 year
+ * - Archive: 24 hour resolution, 3 years
  */
 
 #ifndef HISTORY_H

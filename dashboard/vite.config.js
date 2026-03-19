@@ -17,6 +17,10 @@ export default defineConfig({
       '/api': {
         target: `http://${process.env.ESP32_IP || 'airpurifier.local'}`,
         changeOrigin: true,
+      },
+      '/archive': {
+        target: `http://localhost:${process.env.COLLECTOR_PORT || 9401}`,
+        changeOrigin: true,
       }
     }
   }

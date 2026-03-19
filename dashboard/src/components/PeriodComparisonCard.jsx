@@ -3,15 +3,16 @@ import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { ALL_METRICS, TIERS } from './HistoryChart';
 import { useTemperatureUnit, convertTemp } from '@/utils/temperature';
 
-// Duration in seconds for each tier (matched to backend time windows)
-const TIER_DURATIONS = {
-  raw: 3600,       // 1h
-  fine: 21600,     // 6h
-  medium: 86400,   // 24h
-  coarse: 604800,  // 7d
-  daily: 2592000,  // 30d
-  archive: 94608000, // 3y
-};
+// Derive tier durations from TIERS config instead of maintaining a separate map.
+// For ESP32-only tiers (no maxAge), compute from known buffer capacities.
+const ESP32_CAPACITIES = { raw: 1800, fine: 360 };
+export const TIER_DURATIONS = Object.fromEntries(
+  TIERS.map(t => {
+    if (t.maxAge > 0) return [t.key, t.maxAge];
+    const capacity = ESP32_CAPACITIES[t.apiKey || t.key];
+    return [t.key, capacity ? capacity * t.resolution : 0];
+  })
+);
 
 function calculateAverage(samples, metricKey, unit) {
   const values = samples
@@ -27,7 +28,8 @@ function calculateAverage(samples, metricKey, unit) {
 function splitPeriods(samples, tier) {
   if (!samples || samples.length === 0) return { current: [], previous: [] };
 
-  const duration = TIER_DURATIONS[tier] || 86400;
+  const duration = TIER_DURATIONS[tier];
+  if (!duration) return { current: samples, previous: [] };
   // Use current Unix time for filtering
   const nowUnix = Math.floor(Date.now() / 1000);
 
