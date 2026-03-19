@@ -14,11 +14,40 @@ function calculateStats(samples, metricKey, tempUnit) {
 
   if (values.length === 0) return null;
 
-  return {
-    min: Math.min(...values),
-    max: Math.max(...values),
-    avg: values.reduce((a, b) => a + b, 0) / values.length,
-  };
+  const avg = values.reduce((a, b) => a + b, 0) / values.length;
+
+  // Use true server-side min/max when available (archive data with _min/_max fields)
+  const minKey = `${metricKey}_min`;
+  const maxKey = `${metricKey}_max`;
+  const hasServerRange = samples.some(s => s[minKey] != null);
+
+  let min, max;
+  if (hasServerRange) {
+    if (metricKey === 'temperature') {
+      min = Math.min(...samples.map(s => s[minKey] != null ? convertTemp(s[minKey], tempUnit) : Infinity));
+      max = Math.max(...samples.map(s => s[maxKey] != null ? convertTemp(s[maxKey], tempUnit) : -Infinity));
+    } else {
+      min = Math.min(...samples.map(s => s[minKey] ?? Infinity).filter(v => v !== Infinity));
+      max = Math.max(...samples.map(s => s[maxKey] ?? -Infinity).filter(v => v !== -Infinity));
+    }
+  } else if (metricKey === 'aqi') {
+    // AQI is derived client-side — use server-side pm2_5 min/max if available
+    const hasPmRange = samples.some(s => s.pm2_5_min != null);
+    if (hasPmRange) {
+      const aqiMins = samples.map(s => s.pm2_5_min != null ? calculateAQI(s.pm2_5_min)?.aqi : null).filter(v => v != null);
+      const aqiMaxs = samples.map(s => s.pm2_5_max != null ? calculateAQI(s.pm2_5_max)?.aqi : null).filter(v => v != null);
+      min = aqiMins.length > 0 ? Math.min(...aqiMins) : Math.min(...values);
+      max = aqiMaxs.length > 0 ? Math.max(...aqiMaxs) : Math.max(...values);
+    } else {
+      min = Math.min(...values);
+      max = Math.max(...values);
+    }
+  } else {
+    min = Math.min(...values);
+    max = Math.max(...values);
+  }
+
+  return { min, max, avg };
 }
 
 export default function StatisticsSummaryCard({ samples = [], visibleMetrics = [], tier }) {

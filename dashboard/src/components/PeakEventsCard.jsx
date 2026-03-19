@@ -36,13 +36,16 @@ function analyzePeakEvents(samples, tier) {
   const tierInfo = TIERS.find(t => t.key === tier);
   const resolution = tierInfo?.resolution || 60;
 
+  // Use pm2_5_max when available (archive data) to catch spikes hidden in averaged buckets
+  const pm25Value = (s) => s == null ? null : (s.pm2_5_max ?? s.pm2_5);
+
   // Find peak PM2.5 sample
   const peakSample = samples.reduce((max, s) =>
-    (s.pm2_5 != null && s.pm2_5 > (max?.pm2_5 ?? -1)) ? s : max, null);
+    (pm25Value(s) != null && pm25Value(s) > (pm25Value(max) ?? -1)) ? s : max, null);
 
   // Analyze each threshold
   const thresholds = PM25_THRESHOLDS.map(threshold => {
-    const exceedances = samples.filter(s => s.pm2_5 != null && s.pm2_5 > threshold.level);
+    const exceedances = samples.filter(s => pm25Value(s) != null && pm25Value(s) > threshold.level);
     const durationSeconds = exceedances.length * resolution;
 
     return {
@@ -54,7 +57,7 @@ function analyzePeakEvents(samples, tier) {
 
   return {
     thresholds,
-    peak: peakSample?.pm2_5,
+    peak: peakSample ? pm25Value(peakSample) : null,
     peakTimestamp: peakSample?.timestamp,
   };
 }

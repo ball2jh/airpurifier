@@ -92,19 +92,28 @@ export const getArchiveQuery = (from, to, resolution) =>
     if (!r.ok) throw new Error(`Archive query failed: ${r.status}`);
     return r.json();
   }).then(data => {
+    const RANGE_METRICS = ['pm1_0', 'pm2_5', 'pm4_0', 'pm10', 'humidity', 'temperature', 'voc_index', 'nox_index'];
     // Transform aggregated buckets into the sample shape the chart expects
-    const samples = data.samples.map(s => ({
-      timestamp: s.bucket,
-      pm1_0: s.pm1_0_avg,
-      pm2_5: s.pm2_5_avg,
-      pm4_0: s.pm4_0_avg,
-      pm10: s.pm10_avg,
-      humidity: s.humidity_avg,
-      temperature: s.temperature_avg,
-      voc_index: s.voc_index_avg,
-      nox_index: s.nox_index_avg,
-      fan_rpm: s.fan_rpm_avg,
-      fan_speed: s.fan_speed_avg,
-    }));
-    return { samples, count: samples.length };
+    const samples = data.samples.map(s => {
+      const point = {
+        timestamp: s.bucket,
+        pm1_0: s.pm1_0_avg,
+        pm2_5: s.pm2_5_avg,
+        pm4_0: s.pm4_0_avg,
+        pm10: s.pm10_avg,
+        humidity: s.humidity_avg,
+        temperature: s.temperature_avg,
+        voc_index: s.voc_index_avg,
+        nox_index: s.nox_index_avg,
+        fan_rpm: s.fan_rpm_avg,
+        fan_speed: s.fan_speed_avg,
+      };
+      // Pass through min/max for metrics that have them
+      for (const m of RANGE_METRICS) {
+        point[`${m}_min`] = s[`${m}_min`];
+        point[`${m}_max`] = s[`${m}_max`];
+      }
+      return point;
+    });
+    return { samples, count: samples.length, hasRange: true };
   });

@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import {
-  LineChart,
+  ComposedChart,
   Line,
+  Area,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -30,7 +31,7 @@ export const TIERS = [
   { key: '15m', label: '15m', resolution: 2, resolutionLabel: '2s', apiKey: 'raw', maxAge: 900 },
   { key: '30m', label: '30m', resolution: 2, resolutionLabel: '2s', apiKey: 'raw', maxAge: 1800 },
   { key: 'raw', label: '1h', resolution: 2, resolutionLabel: '2s' },
-  { key: 'fine', label: '6h', resolution: 60, resolutionLabel: '1m' },
+  { key: 'fine', label: '6h', resolution: 60, resolutionLabel: '1m', source: 'archive', maxAge: 21600 },
   { key: 'medium', label: '24h', resolution: 60, resolutionLabel: '1m', source: 'archive', maxAge: 86400 },
   { key: 'coarse', label: '7d', resolution: 300, resolutionLabel: '5m', source: 'archive', maxAge: 604800 },
   { key: 'daily', label: '30d', resolution: 900, resolutionLabel: '15m', source: 'archive', maxAge: 2592000 },
@@ -90,6 +91,8 @@ export const METRIC_GROUPS = [
 
 export const ALL_METRICS = METRIC_GROUPS.flatMap(g => g.metrics.map(m => ({ ...m, group: g.name, unit: m.unit || g.unit, yAxis: g.yAxis })));
 
+const RANGE_METRICS = new Set(['pm1_0', 'pm2_5', 'pm4_0', 'pm10', 'humidity', 'temperature', 'voc_index', 'nox_index']);
+
 function formatTimestamp(unixSeconds, tier, forTooltip = false) {
   const date = new Date(unixSeconds * 1000);
   const now = new Date();
@@ -132,16 +135,18 @@ function formatTimestamp(unixSeconds, tier, forTooltip = false) {
   return date.toLocaleDateString([], { month: 'short', year: '2-digit' });
 }
 
-function CustomTooltip({ active, payload, label, normalized, metricRanges, tier, tempUnitLabel }) {
+function CustomTooltip({ active, payload, label, normalized, metricRanges, tier, tempUnitLabel, hasRange }) {
   if (!active || !payload?.length) return null;
 
   // label is timestamp (unix seconds)
   const timeLabel = formatTimestamp(label, tier, true);
+  // Access the full data point for min/max fields
+  const dataPoint = payload[0]?.payload;
 
   return (
     <div className="bg-surface border border-surface-1 rounded-lg p-3 shadow-lg">
       <div className="text-xs text-overlay mb-2">{timeLabel}</div>
-      {payload.map((entry) => {
+      {payload.filter(entry => !String(entry.dataKey).includes('_range_')).map((entry) => {
         // Get the base key (remove _norm suffix if present)
         const baseKey = entry.dataKey.replace('_norm', '');
         const metric = ALL_METRICS.find(m => m.key === baseKey);
@@ -157,6 +162,17 @@ function CustomTooltip({ active, payload, label, normalized, metricRanges, tier,
           displayValue = `${typeof entry.value === 'number' ? entry.value.toFixed(1) : entry.value}${unit}`;
         }
 
+        // Append range info for archive tiers with min/max data
+        let rangeStr = '';
+        if (hasRange && dataPoint && RANGE_METRICS.has(baseKey)) {
+          const minVal = dataPoint[`${baseKey}_min`];
+          const maxVal = dataPoint[`${baseKey}_max`];
+          if (minVal != null && maxVal != null) {
+            // temperature min/max already converted in chartData
+            rangeStr = ` (${minVal.toFixed(1)} – ${maxVal.toFixed(1)})`;
+          }
+        }
+
         return (
           <div key={entry.dataKey} className="flex items-center gap-2 text-sm">
             <span
@@ -164,7 +180,7 @@ function CustomTooltip({ active, payload, label, normalized, metricRanges, tier,
               style={{ background: entry.color }}
             />
             <span className="text-subtext">{metric?.label || entry.name}:</span>
-            <span className="text-text font-medium">{displayValue}</span>
+            <span className="text-text font-medium">{displayValue}<span className="text-overlay font-normal">{rangeStr}</span></span>
           </div>
         );
       })}
@@ -206,11 +222,14 @@ export default function HistoryChart({ tier, setTier, visibleMetrics, setVisible
 
   const samples = data?.samples || [];
 
+  const hasRange = data?.hasRange === true;
+
   // Calculate min/max for each visible metric (for normalization)
+  // When archive data has _min/_max, include those in the range so normalization covers full extent
   const metricRanges = {};
   if (samples.length > 0) {
     visibleMetrics.forEach(key => {
-      const values = samples
+      const avgValues = samples
         .map(s => {
           if (key === 'temperature' && s.temperature != null) {
             return convertTemp(s.temperature, tempUnitValue);
@@ -221,9 +240,27 @@ export default function HistoryChart({ tier, setTier, visibleMetrics, setVisible
           return s[key];
         })
         .filter(v => v != null && !isNaN(v));
-      if (values.length > 0) {
-        const min = Math.min(...values);
-        const max = Math.max(...values);
+
+      if (avgValues.length > 0) {
+        let min = Math.min(...avgValues);
+        let max = Math.max(...avgValues);
+
+        // Extend range with server-side min/max when available
+        if (hasRange && RANGE_METRICS.has(key)) {
+          const minValues = samples.map(s => {
+            const v = s[`${key}_min`];
+            if (v == null) return null;
+            return key === 'temperature' ? convertTemp(v, tempUnitValue) : v;
+          }).filter(v => v != null && !isNaN(v));
+          const maxValues = samples.map(s => {
+            const v = s[`${key}_max`];
+            if (v == null) return null;
+            return key === 'temperature' ? convertTemp(v, tempUnitValue) : v;
+          }).filter(v => v != null && !isNaN(v));
+          if (minValues.length > 0) min = Math.min(min, ...minValues);
+          if (maxValues.length > 0) max = Math.max(max, ...maxValues);
+        }
+
         metricRanges[key] = { min, max, range: max - min || 1 };
       }
     });
@@ -237,6 +274,25 @@ export default function HistoryChart({ tier, setTier, visibleMetrics, setVisible
       aqi: aqiResult?.aqi ?? null,
     };
 
+    // Convert temperature min/max to display unit
+    if (hasRange && s.temperature_min != null) {
+      base.temperature_min = convertTemp(s.temperature_min, tempUnitValue);
+      base.temperature_max = convertTemp(s.temperature_max, tempUnitValue);
+    }
+
+    // Compute range band data for visible metrics with min/max
+    if (hasRange) {
+      visibleMetrics.forEach(key => {
+        if (!RANGE_METRICS.has(key)) return;
+        const minVal = key === 'temperature' ? base.temperature_min : s[`${key}_min`];
+        const maxVal = key === 'temperature' ? base.temperature_max : s[`${key}_max`];
+        if (minVal != null && maxVal != null) {
+          base[`${key}_range_base`] = minVal;
+          base[`${key}_range_band`] = maxVal - minVal;
+        }
+      });
+    }
+
     if (normalized) {
       // Add normalized versions of each visible metric
       visibleMetrics.forEach(key => {
@@ -244,6 +300,15 @@ export default function HistoryChart({ tier, setTier, visibleMetrics, setVisible
         const value = key === 'temperature' ? base.temperature : base[key];
         if (range && value != null) {
           base[`${key}_norm`] = ((value - range.min) / range.range) * 100;
+        }
+        // Normalized range bands
+        if (hasRange && RANGE_METRICS.has(key) && range) {
+          const minVal = base[`${key}_range_base`];
+          const bandVal = base[`${key}_range_band`];
+          if (minVal != null && bandVal != null) {
+            base[`${key}_norm_range_base`] = ((minVal - range.min) / range.range) * 100;
+            base[`${key}_norm_range_band`] = (bandVal / range.range) * 100;
+          }
         }
       });
     }
@@ -376,7 +441,7 @@ export default function HistoryChart({ tier, setTier, visibleMetrics, setVisible
       {/* Chart */}
       {hasData && (
         <ResponsiveContainer width="100%" height={chartHeight}>
-          <LineChart data={chartData} title="Air quality history over time" margin={{ top: 5, right: 5, bottom: 5, left: windowWidth < 640 ? -5 : -10 }}>
+          <ComposedChart data={chartData} title="Air quality history over time" margin={{ top: 5, right: 5, bottom: 5, left: windowWidth < 640 ? -5 : -10 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#313244" />
             <XAxis
               dataKey="timestamp"
@@ -420,7 +485,7 @@ export default function HistoryChart({ tier, setTier, visibleMetrics, setVisible
               </>
             )}
             <Tooltip
-              content={<CustomTooltip normalized={normalized} metricRanges={metricRanges} tier={tier} tempUnitLabel={tempUnit(tempUnitValue)} />}
+              content={<CustomTooltip normalized={normalized} metricRanges={metricRanges} tier={tier} tempUnitLabel={tempUnit(tempUnitValue)} hasRange={hasRange} />}
             />
             {windowWidth >= 640 && (
               <Legend
@@ -428,6 +493,40 @@ export default function HistoryChart({ tier, setTier, visibleMetrics, setVisible
                 formatter={(value) => <span className="text-sm text-subtext">{value}</span>}
               />
             )}
+            {/* Range bands (stacked area: invisible base 0→min + visible band min→max) — only for archive tiers */}
+            {hasRange && ALL_METRICS.filter(m => visibleMetrics.includes(m.key) && RANGE_METRICS.has(m.key)).flatMap(m => {
+              const prefix = normalized ? `${m.key}_norm` : m.key;
+              const yAxisId = normalized ? 'left' : m.yAxis;
+              return [
+                <Area
+                  key={`${m.key}_range_base`}
+                  type="monotone"
+                  dataKey={`${prefix}_range_base`}
+                  stackId={`range_${m.key}`}
+                  fill="transparent"
+                  stroke="none"
+                  yAxisId={yAxisId}
+                  legendType="none"
+                  tooltipType="none"
+                  isAnimationActive={false}
+                  connectNulls
+                />,
+                <Area
+                  key={`${m.key}_range_band`}
+                  type="monotone"
+                  dataKey={`${prefix}_range_band`}
+                  stackId={`range_${m.key}`}
+                  fill={m.color}
+                  fillOpacity={0.12}
+                  stroke="none"
+                  yAxisId={yAxisId}
+                  legendType="none"
+                  tooltipType="none"
+                  isAnimationActive={false}
+                  connectNulls
+                />,
+              ];
+            })}
             {ALL_METRICS.filter(m => visibleMetrics.includes(m.key)).map(m => (
               <Line
                 key={m.key}
@@ -445,7 +544,7 @@ export default function HistoryChart({ tier, setTier, visibleMetrics, setVisible
                 animationEasing="ease-out"
               />
             ))}
-          </LineChart>
+          </ComposedChart>
         </ResponsiveContainer>
       )}
 
