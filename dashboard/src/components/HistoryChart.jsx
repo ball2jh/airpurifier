@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import {
   ComposedChart,
   Line,
@@ -230,47 +230,50 @@ export default function HistoryChart({ tier, setTier, visibleMetrics, setVisible
 
   // Calculate min/max for each visible metric (for normalization)
   // When archive data has _min/_max, include those in the range so normalization covers full extent
-  const metricRanges = {};
-  if (samples.length > 0) {
-    visibleMetrics.forEach(key => {
-      const avgValues = samples
-        .map(s => {
-          if (key === 'temperature' && s.temperature != null) {
-            return convertTemp(s.temperature, tempUnitValue);
-          }
-          if (key === 'aqi') {
-            return calculateAQI(s.pm2_5)?.aqi ?? null;
-          }
-          return s[key];
-        })
-        .filter(v => v != null && !isNaN(v));
+  const metricRanges = useMemo(() => {
+    const ranges = {};
+    if (samples.length > 0) {
+      visibleMetrics.forEach(key => {
+        const avgValues = samples
+          .map(s => {
+            if (key === 'temperature' && s.temperature != null) {
+              return convertTemp(s.temperature, tempUnitValue);
+            }
+            if (key === 'aqi') {
+              return calculateAQI(s.pm2_5)?.aqi ?? null;
+            }
+            return s[key];
+          })
+          .filter(v => v != null && !isNaN(v));
 
-      if (avgValues.length > 0) {
-        let min = Math.min(...avgValues);
-        let max = Math.max(...avgValues);
+        if (avgValues.length > 0) {
+          let min = Math.min(...avgValues);
+          let max = Math.max(...avgValues);
 
-        // Extend range with server-side min/max when available
-        if (hasRange && RANGE_METRICS.has(key)) {
-          const minValues = samples.map(s => {
-            const v = s[`${key}_min`];
-            if (v == null) return null;
-            return key === 'temperature' ? convertTemp(v, tempUnitValue) : v;
-          }).filter(v => v != null && !isNaN(v));
-          const maxValues = samples.map(s => {
-            const v = s[`${key}_max`];
-            if (v == null) return null;
-            return key === 'temperature' ? convertTemp(v, tempUnitValue) : v;
-          }).filter(v => v != null && !isNaN(v));
-          if (minValues.length > 0) min = Math.min(min, ...minValues);
-          if (maxValues.length > 0) max = Math.max(max, ...maxValues);
+          // Extend range with server-side min/max when available
+          if (hasRange && RANGE_METRICS.has(key)) {
+            const minValues = samples.map(s => {
+              const v = s[`${key}_min`];
+              if (v == null) return null;
+              return key === 'temperature' ? convertTemp(v, tempUnitValue) : v;
+            }).filter(v => v != null && !isNaN(v));
+            const maxValues = samples.map(s => {
+              const v = s[`${key}_max`];
+              if (v == null) return null;
+              return key === 'temperature' ? convertTemp(v, tempUnitValue) : v;
+            }).filter(v => v != null && !isNaN(v));
+            if (minValues.length > 0) min = Math.min(min, ...minValues);
+            if (maxValues.length > 0) max = Math.max(max, ...maxValues);
+          }
+
+          ranges[key] = { min, max, range: max - min || 1 };
         }
+      });
+    }
+    return ranges;
+  }, [samples, visibleMetrics, hasRange, tempUnitValue]);
 
-        metricRanges[key] = { min, max, range: max - min || 1 };
-      }
-    });
-  }
-
-  const chartData = samples.map(s => {
+  const chartData = useMemo(() => samples.map(s => {
     const aqiResult = calculateAQI(s.pm2_5);
     const base = {
       ...s,
@@ -318,7 +321,7 @@ export default function HistoryChart({ tier, setTier, visibleMetrics, setVisible
     }
 
     return base;
-  });
+  }), [samples, hasRange, visibleMetrics, normalized, metricRanges, tempUnitValue]);
 
   const hasData = chartData.length > 0;
 
@@ -327,9 +330,6 @@ export default function HistoryChart({ tier, setTier, visibleMetrics, setVisible
     const metric = ALL_METRICS.find(m => m.key === key);
     return metric?.yAxis === 'right';
   });
-
-  // Need multiple axes when not normalized and metrics have different scales
-  const needsMultipleAxes = !normalized && visibleMetrics.length > 1;
 
   return (
     <Card className="p-3 sm:p-4 md:p-6 border-surface-1">

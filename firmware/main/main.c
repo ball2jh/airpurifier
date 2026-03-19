@@ -301,21 +301,24 @@ void app_main(void)
         if (sen_ret == ESP_OK) {
             sensor_failures = 0;  // Reset failure counter on success
 
-            // Record to history
-            history_sample_t sample = {
-                .timestamp = history_get_timestamp(),  // Continuous across restores
-                .pm1_0 = air.pm1_0,
-                .pm2_5 = air.pm2_5,
-                .pm4_0 = air.pm4_0,
-                .pm10 = air.pm10,
-                .humidity = air.humidity,
-                .temperature = air.temperature,
-                .voc_index = air.voc_index,
-                .nox_index = air.nox_index,
-                .fan_rpm = (uint16_t)rpm,
-                .fan_speed = speed,
-            };
-            history_record(&sample);
+            // Record to history (skip until NTP synced — boot-second timestamps
+            // break the monotonic assumption in history_get_samples_since)
+            if (time_sync_is_synced()) {
+                history_sample_t sample = {
+                    .timestamp = history_get_timestamp(),
+                    .pm1_0 = air.pm1_0,
+                    .pm2_5 = air.pm2_5,
+                    .pm4_0 = air.pm4_0,
+                    .pm10 = air.pm10,
+                    .humidity = air.humidity,
+                    .temperature = air.temperature,
+                    .voc_index = air.voc_index,
+                    .nox_index = air.nox_index,
+                    .fan_rpm = (uint16_t)rpm,
+                    .fan_speed = speed,
+                };
+                history_record(&sample);
+            }
 
             // Update fan speed if in AUTO mode
             fan_auto_update(air.pm2_5);
