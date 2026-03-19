@@ -1,16 +1,42 @@
-# React + Vite
+# airpurifier-ui
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Web dashboard for the [airpurifier](https://github.com/ball2jh/airpurifier) ESP32 controller. Displays real-time and historical environmental data from the SEN55 sensor — temperature, humidity, AQI, PM2.5 — with fan control.
 
-Currently, two official plugins are available:
+## Features
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- **Live monitoring** — current readings with auto-refresh
+- **History charts** — tiered views from 15 minutes to 3 years
+- **Fan control** — toggle auto/manual mode and set speed
+- **Air quality breakdown** — AQI, PM details, VOC/NOx, relative quality comparisons
+- **Statistics** — peaks, period comparisons, trend summaries
+- **System info** — uptime, WiFi signal, NTP status, data management
 
-## React Compiler
+## Setup
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+```bash
+git clone https://github.com/ball2jh/airpurifier-ui.git
+cd airpurifier-ui
+bun install   # or npm install
+```
 
-## Expanding the ESLint configuration
+The dev server proxies `/api` requests to the ESP32 via mDNS (`airpurifier.local` by default). Override with an env var if needed:
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+```bash
+ESP32_IP=192.168.1.100 bun run dev
+```
+
+## Build
+
+```bash
+bun run build
+```
+
+The `dist/` output can be served from anywhere on the same network as the ESP32, or embedded into the firmware.
+
+## Stack
+
+React, Vite, Tailwind CSS, Recharts, TanStack Query
+
+## License
+
+MIT
