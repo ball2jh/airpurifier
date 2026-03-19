@@ -1,6 +1,6 @@
 # airpurifier-collector
 
-Host-side history collector for the [esp32-env-controller](https://github.com/ball2jh/esp32-env-controller). Polls the ESP32's binary history API every 30 seconds, stores all sensor data in a local SQLite database, and serves an archive API for long-term querying and CSV export.
+Host-side history collector for the [airpurifier](https://github.com/ball2jh/airpurifier) ESP32 controller. Polls the ESP32's binary history API every 30 seconds, stores all sensor data in a local SQLite database, and serves an archive API for long-term querying and CSV export.
 
 The ESP32's on-device ring buffers retain ~1 year of data at decreasing resolution. This collector preserves full-resolution data indefinitely on a host machine, and backfills any gaps on startup.
 
@@ -60,7 +60,7 @@ sudo systemctl enable --now esp32-collector
 
 | Repository | Description |
 |------------|-------------|
-| [esp32-env-controller](https://github.com/ball2jh/esp32-env-controller) | ESP32 firmware — SEN55 sensor, fan control, REST API |
+| [airpurifier](https://github.com/ball2jh/airpurifier) | ESP32 firmware — SEN55 sensor, fan control, REST API |
 | [airpurifier-ui](https://github.com/ball2jh/airpurifier-ui) | Web dashboard — real-time monitoring and history charts |
 
 ## License
