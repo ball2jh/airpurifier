@@ -2,7 +2,7 @@ const { Database } = require('bun:sqlite');
 const path = require('path');
 const fs = require('fs');
 
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, 'history.db');
+const DB_PATH = process.env.DB_PATH || '/mnt/ssd-240gb/airpurifier/history.db';
 
 let db;
 
@@ -11,6 +11,8 @@ function getDb() {
     db = new Database(DB_PATH);
     db.run('PRAGMA journal_mode = WAL');
     db.run('PRAGMA synchronous = NORMAL');
+    db.run('PRAGMA busy_timeout = 5000');
+    db.run('PRAGMA cache_size = -8000');
     db.run(`
       CREATE TABLE IF NOT EXISTS samples (
         timestamp INTEGER PRIMARY KEY,
@@ -120,6 +122,16 @@ function getRawSamples(from, to) {
   `).all(from, to);
 }
 
+function iterateRawSamples(from, to) {
+  const db = getDb();
+  return db.query(`
+    SELECT timestamp, pm1_0, pm2_5, pm4_0, pm10, humidity, temperature, voc_index, nox_index, fan_rpm, fan_speed
+    FROM samples
+    WHERE timestamp BETWEEN ?1 AND ?2
+    ORDER BY timestamp
+  `).iterate(from, to);
+}
+
 function close() {
   if (db) {
     db.close();
@@ -127,4 +139,4 @@ function close() {
   }
 }
 
-module.exports = { getDb, insertSamples, getWatermark, queryAggregated, getStats, getRawSamples, close };
+module.exports = { getDb, insertSamples, getWatermark, queryAggregated, getStats, getRawSamples, iterateRawSamples, close };
