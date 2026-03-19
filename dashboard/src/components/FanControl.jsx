@@ -610,7 +610,7 @@ export default function FanControl() {
           <h3 className="text-sm font-medium text-text mb-1">PWM vs RPM</h3>
           <p className="text-xs text-overlay mb-4">Arctic P14 Pro @ 12V</p>
           <ResponsiveContainer width="100%" height={windowWidth < 640 ? 180 : 220}>
-            <LineChart data={PWM_CURVE_DATA} margin={{ top: 10, right: 10, bottom: 0, left: -10 }}>
+            <LineChart data={PWM_CURVE_DATA} title="Fan PWM to RPM response curve" margin={{ top: 10, right: 10, bottom: 0, left: -10 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#313244" />
               <XAxis
                 dataKey="pwm"
@@ -625,11 +625,24 @@ export default function FanControl() {
                 tickFormatter={(v) => v.toLocaleString()}
               />
               <Tooltip
-                contentStyle={{ backgroundColor: '#1e1e2e', border: '1px solid #313244', borderRadius: 8 }}
-                labelFormatter={(v) => `PWM: ${v}%`}
-                formatter={(v) => [`${v.toLocaleString()} RPM`, 'Speed']}
+                content={({ active, payload, label }) => {
+                  if (!active || !payload?.length) return null;
+                  return (
+                    <div className="bg-surface border border-surface-1 rounded-lg p-3 shadow-lg">
+                      <div className="text-xs text-overlay mb-2">PWM: {label}%</div>
+                      {payload.map((entry) => (
+                        <div key={entry.dataKey} className="flex items-center gap-2 text-sm">
+                          <span className="w-2 h-2 rounded-full" style={{ background: entry.color }} />
+                          <span className="text-subtext">Speed:</span>
+                          <span className="text-text font-medium">{entry.value.toLocaleString()} RPM</span>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                }}
               />
               <Line
+                connectNulls
                 type="monotone"
                 dataKey="rpm"
                 stroke="#89b4fa"
@@ -692,7 +705,7 @@ export default function FanControl() {
           <h3 className="text-sm font-medium text-text mb-1">Pressure vs Airflow</h3>
           <p className="text-xs text-overlay mb-4">Performance at {rpm > 0 ? `${Math.round((rpm / 2472) * 100)}%` : 'max'} speed</p>
           <ResponsiveContainer width="100%" height={windowWidth < 640 ? 180 : 220}>
-            <LineChart data={PQ_CURVE_DATA} margin={{ top: 10, right: 10, bottom: 0, left: -10 }}>
+            <LineChart data={PQ_CURVE_DATA} title="Fan pressure versus airflow curve" margin={{ top: 10, right: 10, bottom: 0, left: -10 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#313244" />
               <XAxis
                 dataKey="cfm"
@@ -707,10 +720,25 @@ export default function FanControl() {
                 label={{ value: 'mmH₂O', angle: -90, position: 'insideLeft', fontSize: 10, fill: '#6c7086' }}
               />
               <Tooltip
-                contentStyle={{ backgroundColor: '#1e1e2e', border: '1px solid #313244', borderRadius: 8 }}
-                formatter={(v, name) => [name === 'pressure' ? `${v} mmH₂O` : `${v} CFM`, name === 'pressure' ? 'Pressure' : 'Airflow']}
+                content={({ active, payload }) => {
+                  if (!active || !payload?.length) return null;
+                  return (
+                    <div className="bg-surface border border-surface-1 rounded-lg p-3 shadow-lg">
+                      {payload.map((entry) => (
+                        <div key={entry.dataKey} className="flex items-center gap-2 text-sm">
+                          <span className="w-2 h-2 rounded-full" style={{ background: entry.color }} />
+                          <span className="text-subtext">{entry.dataKey === 'pressure' ? 'Pressure' : 'Airflow'}:</span>
+                          <span className="text-text font-medium">
+                            {entry.dataKey === 'pressure' ? `${entry.value} mmH₂O` : `${entry.value} CFM`}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                }}
               />
               <Line
+                connectNulls
                 type="monotone"
                 dataKey="pressure"
                 stroke="#cba6f7"

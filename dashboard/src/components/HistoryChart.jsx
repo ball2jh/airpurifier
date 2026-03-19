@@ -376,7 +376,7 @@ export default function HistoryChart({ tier, setTier, visibleMetrics, setVisible
       {/* Chart */}
       {hasData && (
         <ResponsiveContainer width="100%" height={chartHeight}>
-          <LineChart data={chartData} margin={{ top: 5, right: 5, bottom: 5, left: windowWidth < 640 ? -5 : -10 }}>
+          <LineChart data={chartData} title="Air quality history over time" margin={{ top: 5, right: 5, bottom: 5, left: windowWidth < 640 ? -5 : -10 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#313244" />
             <XAxis
               dataKey="timestamp"
@@ -431,6 +431,7 @@ export default function HistoryChart({ tier, setTier, visibleMetrics, setVisible
             {ALL_METRICS.filter(m => visibleMetrics.includes(m.key)).map(m => (
               <Line
                 key={m.key}
+                connectNulls
                 type="monotone"
                 dataKey={normalized ? `${m.key}_norm` : m.key}
                 name={m.label}
