@@ -386,7 +386,7 @@ export default function HistoryChart({ tier, setTier, visibleMetrics, setVisible
               {TIERS.map(t => (
                 <button
                   key={t.key}
-                  className={`px-2.5 sm:px-3 py-2.5 sm:py-1.5 text-sm sm:text-xs min-w-[40px] font-medium rounded-md transition-colors whitespace-nowrap ${
+                  className={`inline-flex items-center justify-center px-2.5 sm:px-3 py-2.5 sm:py-1.5 text-sm sm:text-xs min-w-[40px] font-medium rounded-md transition-colors whitespace-nowrap ${
                     tier === t.key
                       ? 'bg-blue text-base'
                       : 'text-subtext hover:text-text hover:bg-surface'
