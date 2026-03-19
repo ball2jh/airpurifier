@@ -13,6 +13,7 @@
 #include "esp_ota_ops.h"
 #include "esp_http_client.h"
 #include "esp_app_format.h"
+#include "esp_task_wdt.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -139,8 +140,12 @@ static void ota_task(void *pvParameter)
         goto cleanup;
     }
 
+    // Subscribe OTA task to watchdog so we can feed it during long flash ops
+    esp_task_wdt_add(NULL);
+
     // Download and write firmware
     while (1) {
+        esp_task_wdt_reset();
         int read_len = esp_http_client_read(client, buffer, OTA_BUFFER_SIZE);
         if (read_len < 0) {
             ESP_LOGE(TAG, "HTTP read error");
@@ -220,11 +225,16 @@ static void ota_task(void *pvParameter)
     free(buffer);
 
     // Save VOC algorithm state before reboot (only effective after 3h uptime)
+    esp_task_wdt_reset();
     sen55_save_voc_state();
 
     // Save history again to preserve samples collected during download
+    esp_task_wdt_reset();
     ESP_LOGI(TAG, "Saving history before reboot...");
     history_save();
+
+    // Remove from WDT before reboot
+    esp_task_wdt_delete(NULL);
 
     // Delay then reboot
     vTaskDelay(pdMS_TO_TICKS(2000));
@@ -232,6 +242,7 @@ static void ota_task(void *pvParameter)
     return;  // Never reached
 
 cleanup:
+    esp_task_wdt_delete(NULL);  // Safe even if not subscribed
     if (ota_handle != 0) {
         esp_ota_abort(ota_handle);
     }

@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Cpu, Wifi, HardDrive, Clock, Globe, Activity, Radio } from 'lucide-react';
+import { Cpu, Wifi, HardDrive, Clock, Globe, Activity, Radio, RotateCcw, AlertTriangle, BarChart3 } from 'lucide-react';
 import { getInfo, getOta } from '../api/esp32';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -38,7 +38,7 @@ export default function SystemInfo({ health }) {
       <h3 className="text-lg font-semibold text-text mb-4">System Info</h3>
 
       {/* Info Grid */}
-      <div className="mb-6">
+      <div className="mb-6 grid grid-cols-1 lg:grid-cols-2 lg:gap-x-8">
         {info && (
           <>
             <InfoItem icon={Cpu} label="Device" value={info.device} />
@@ -49,8 +49,23 @@ export default function SystemInfo({ health }) {
             <InfoItem icon={HardDrive} label="Free Heap" value={`${formatBytes(info.free_heap)} (min: ${formatBytes(info.min_free_heap)})`} />
           </>
         )}
+        {info && (
+          <InfoItem icon={RotateCcw} label="Reset Reason" value={info.reset_reason} />
+        )}
         {health?.wifi && (
-          <InfoItem icon={Wifi} label="WiFi Signal" value={`${health.wifi.rssi} dBm`} />
+          <>
+            <InfoItem icon={Wifi} label="WiFi Signal" value={`${health.wifi.rssi} dBm`} />
+            {health.wifi.disconnect_count > 0 && (
+              <InfoItem icon={AlertTriangle} label="WiFi Disconnects" value={health.wifi.disconnect_count} />
+            )}
+          </>
+        )}
+        {health?.sensor && (
+          <InfoItem
+            icon={BarChart3}
+            label="Sensor Reads"
+            value={`${health.sensor.successful_reads}/${health.sensor.total_reads}${health.sensor.crc_errors > 0 ? ` (${health.sensor.crc_errors} CRC err)` : ''}`}
+          />
         )}
         {ota && (
           <InfoItem icon={HardDrive} label="OTA Partition" value={ota.partition} />
