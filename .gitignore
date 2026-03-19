@@ -1,0 +1,33 @@
+# Build output
+build/
+sdkconfig.old
+
+# ESP-IDF framework (clone separately per setup instructions)
+esp-idf/
+
+# ESP-IDF managed components (downloaded dependencies)
+managed_components/
+dependencies.lock
+
+# WiFi credentials - keep private!
+main/wifi_config.h
+
+# Python virtual environment
+.venv/
+
+# IDE / tooling
+.vscode/
+.idea/
+.cache/
+.clangd
+*.swp
+*.swo
+*~
+
+# Claude Code
+.claude/
+.claudeignore
+CLAUDE.md
+
+# macOS
+.DS_Store

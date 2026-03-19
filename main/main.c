@@ -1,0 +1,342 @@
+/**
+ * @file main.c
+ * @brief ESP32 Environmental Controller - Main Application
+ *
+ * Controls PWM fans via Arctic fan hub and monitors RPM.
+ * Reads air quality data from SEN55 sensor (PM, temp, humidity, VOC, NOx).
+ *
+ * Reliability features for long-term operation:
+ * - Task watchdog timer to detect hung tasks
+ * - Automatic sensor recovery on communication failures
+ * - Fan stall detection and recovery
+ * - Periodic health status logging
+ */
+
+#include <stdio.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "esp_log.h"
+#include "esp_task_wdt.h"
+#include "esp_timer.h"
+#include "fan_controller.h"
+#include "sen55.h"
+#include "history.h"
+#include "wifi.h"
+#include "api_server.h"
+#include "ota_update.h"
+#include "time_sync.h"
+#include "mdns.h"
+
+static const char *TAG = "main";
+
+// =============================================================================
+// Configuration
+// =============================================================================
+
+#define MONITOR_INTERVAL_MS     2000    // Sensor/fan read interval
+#define HEALTH_LOG_INTERVAL     30      // Log health every N monitor cycles
+#define WATCHDOG_TIMEOUT_S      30      // Watchdog timeout (seconds)
+#define MAX_SENSOR_FAILURES     5       // Sensor failures before recovery
+#define MAX_FAN_STALL_RETRIES   3       // Fan recovery attempts before alert
+#define HISTORY_SAVE_INTERVAL_S (6 * 60 * 60)  // Auto-save history every 6 hours
+
+// =============================================================================
+// State
+// =============================================================================
+
+static uint32_t loop_count = 0;
+static uint32_t sensor_failures = 0;
+static uint32_t fan_stall_retries = 0;
+static int64_t last_history_save_us = 0;  // Last auto-save timestamp
+
+// =============================================================================
+// Health Logging
+// =============================================================================
+
+/**
+ * @brief Log health statistics for diagnostics
+ */
+static void log_health_status(void)
+{
+    sen55_health_t sen_health;
+    fan_health_t fan_health;
+    history_stats_t hist_stats;
+
+    sen55_get_health(&sen_health);
+    fan_get_health(&fan_health);
+    history_get_stats(&hist_stats);
+
+    ESP_LOGI(TAG, "=== Health Status (uptime: %lu cycles) ===", loop_count);
+
+    // SEN55 health
+    float success_rate = 0;
+    if (sen_health.total_reads > 0) {
+        success_rate = (sen_health.successful_reads * 100.0f) / sen_health.total_reads;
+    }
+    ESP_LOGI(TAG, "SEN55: %s (%.1f%% success, %lu reads, %lu CRC err, %lu I2C err, %lu recoveries)",
+             sen_health.is_healthy ? "OK" : "UNHEALTHY",
+             success_rate,
+             sen_health.total_reads,
+             sen_health.crc_errors,
+             sen_health.i2c_errors,
+             sen_health.reinit_count);
+
+    // Fan health
+    ESP_LOGI(TAG, "Fan: %s (%lu stalls, %lu recovery attempts)",
+             fan_health.is_healthy ? "OK" : (fan_health.is_stalled ? "STALLED" : "UNHEALTHY"),
+             fan_health.stall_events,
+             fan_health.recovery_attempts);
+
+    // History stats
+    ESP_LOGI(TAG, "History: %lu samples, %lu KB used",
+             hist_stats.total_samples_recorded,
+             hist_stats.memory_used_bytes / 1024);
+    ESP_LOGI(TAG, "  Tiers: raw=%lu fine=%lu med=%lu coarse=%lu daily=%lu arch=%lu",
+             hist_stats.tiers[TIER_RAW].count,
+             hist_stats.tiers[TIER_FINE].count,
+             hist_stats.tiers[TIER_MEDIUM].count,
+             hist_stats.tiers[TIER_COARSE].count,
+             hist_stats.tiers[TIER_DAILY].count,
+             hist_stats.tiers[TIER_ARCHIVE].count);
+}
+
+// =============================================================================
+// Error Recovery
+// =============================================================================
+
+/**
+ * @brief Handle sensor communication failures
+ */
+static void handle_sensor_failure(void)
+{
+    sensor_failures++;
+
+    if (sensor_failures >= MAX_SENSOR_FAILURES) {
+        ESP_LOGW(TAG, "Multiple sensor failures (%lu), initiating recovery", sensor_failures);
+        esp_err_t ret = sen55_recover();
+        if (ret == ESP_OK) {
+            sensor_failures = 0;
+            ESP_LOGI(TAG, "Sensor recovery successful");
+        } else {
+            ESP_LOGE(TAG, "Sensor recovery failed: %s", esp_err_to_name(ret));
+        }
+    }
+}
+
+/**
+ * @brief Handle fan stall condition
+ */
+static void handle_fan_stall(void)
+{
+    if (!fan_is_stalled()) {
+        fan_stall_retries = 0;
+        return;
+    }
+
+    if (fan_stall_retries < MAX_FAN_STALL_RETRIES) {
+        fan_stall_retries++;
+        ESP_LOGW(TAG, "Fan stall detected, recovery attempt %lu/%d",
+                 fan_stall_retries, MAX_FAN_STALL_RETRIES);
+        fan_recover_stall();
+    } else {
+        // Persistent stall - log but don't keep retrying
+        ESP_LOGE(TAG, "Fan remains stalled after %d recovery attempts", MAX_FAN_STALL_RETRIES);
+    }
+}
+
+// =============================================================================
+// Main Application
+// =============================================================================
+
+void app_main(void)
+{
+    ESP_LOGI(TAG, "=== ESP32 Environmental Controller ===");
+    ESP_LOGI(TAG, "Initializing...");
+
+    // Configure Task Watchdog Timer (TWDT)
+    // The TWDT may already be initialized by the system (CONFIG_ESP_TASK_WDT_INIT)
+    esp_task_wdt_config_t wdt_config = {
+        .timeout_ms = WATCHDOG_TIMEOUT_S * 1000,
+        .idle_core_mask = 0,  // Don't watch idle tasks
+        .trigger_panic = true,  // Reset on watchdog timeout
+    };
+
+    esp_err_t ret = esp_task_wdt_reconfigure(&wdt_config);
+    if (ret == ESP_ERR_INVALID_STATE) {
+        // TWDT not initialized yet, initialize it
+        ret = esp_task_wdt_init(&wdt_config);
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to init TWDT: %s", esp_err_to_name(ret));
+        }
+    } else if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to reconfigure TWDT: %s", esp_err_to_name(ret));
+    }
+
+    // Subscribe main task to watchdog
+    ret = esp_task_wdt_add(NULL);
+    if (ret != ESP_OK && ret != ESP_ERR_INVALID_ARG) {
+        // ESP_ERR_INVALID_ARG means task already subscribed, which is fine
+        ESP_LOGW(TAG, "Failed to add task to TWDT: %s", esp_err_to_name(ret));
+    }
+
+    ESP_LOGI(TAG, "Watchdog configured: %ds timeout", WATCHDOG_TIMEOUT_S);
+
+    // Initialize fan controller
+    ret = fan_controller_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize fan controller!");
+        return;
+    }
+
+    // Initialize SEN55 sensor
+    ret = sen55_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize SEN55 sensor!");
+        return;
+    }
+
+    // Initialize history storage
+    ret = history_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize history!");
+        return;
+    }
+
+    // Initialize WiFi
+    ret = wifi_init();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize WiFi!");
+        return;
+    }
+
+    // Wait for WiFi connection (with timeout)
+    ESP_LOGI(TAG, "Waiting for WiFi connection...");
+    ret = wifi_wait_connected(30000);  // 30 second timeout
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "WiFi connection timeout - continuing anyway");
+    }
+
+    // Initialize NTP time sync (requires WiFi)
+    ret = time_sync_init();
+    if (ret == ESP_OK) {
+        // Wait up to 10 seconds for initial time sync
+        ret = time_sync_wait(10000);
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "Time sync pending - will sync in background");
+        }
+    } else {
+        ESP_LOGW(TAG, "Time sync init failed - using uptime timestamps");
+    }
+
+    // Initialize mDNS for local network discovery
+    ret = mdns_init();
+    if (ret == ESP_OK) {
+        mdns_hostname_set("airpurifier");
+        mdns_instance_name_set("Air Purifier Controller");
+        mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
+        ESP_LOGI(TAG, "mDNS started: airpurifier.local");
+    } else {
+        ESP_LOGW(TAG, "mDNS init failed (non-critical): %s", esp_err_to_name(ret));
+    }
+
+    // Initialize OTA subsystem
+    ret = ota_init();
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "OTA init failed (non-critical): %s", esp_err_to_name(ret));
+    }
+
+    // Start API server
+    ret = api_server_start();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start API server!");
+        return;
+    }
+
+    ESP_LOGI(TAG, "API server running at http://%s/", wifi_get_ip());
+
+    // Start in AUTO mode
+    fan_set_mode(FAN_MODE_AUTO);
+    ESP_LOGI(TAG, "Fan mode set to AUTO");
+
+    // All systems initialized successfully - mark firmware as valid
+    // This prevents automatic rollback to previous firmware
+    if (ota_is_pending_validation()) {
+        ESP_LOGI(TAG, "New firmware validated - confirming update");
+        ota_mark_valid();
+    }
+
+    // Main monitoring loop
+    ESP_LOGI(TAG, "Monitoring started");
+    while (1) {
+        // Feed the watchdog to indicate we're alive
+        esp_task_wdt_reset();
+
+        loop_count++;
+
+        // Read fan status
+        uint32_t rpm = fan_get_rpm();
+        uint8_t speed = fan_get_speed_percent();
+
+        // Check for fan stall
+        handle_fan_stall();
+
+        // Check if manual mode should timeout back to auto
+        fan_check_auto_timeout();
+
+        // Read sensor data
+        sen55_data_t air;
+        esp_err_t sen_ret = sen55_read(&air);
+        if (sen_ret == ESP_OK) {
+            sensor_failures = 0;  // Reset failure counter on success
+
+            // Record to history
+            history_sample_t sample = {
+                .timestamp = history_get_timestamp(),  // Continuous across restores
+                .pm1_0 = air.pm1_0,
+                .pm2_5 = air.pm2_5,
+                .pm4_0 = air.pm4_0,
+                .pm10 = air.pm10,
+                .humidity = air.humidity,
+                .temperature = air.temperature,
+                .voc_index = air.voc_index,
+                .nox_index = air.nox_index,
+                .fan_rpm = (uint16_t)rpm,
+                .fan_speed = speed,
+            };
+            history_record(&sample);
+
+            // Update fan speed if in AUTO mode
+            fan_auto_update(air.pm2_5);
+
+            ESP_LOGI(TAG, "Fan %d%% %lu RPM | PM2.5 %.1f | %.1fC %.0f%% | VOC %d NOx %d",
+                     speed, rpm, air.pm2_5, air.temperature, air.humidity,
+                     air.voc_index, air.nox_index);
+        } else if (sen_ret == ESP_ERR_NOT_FOUND) {
+            // No new data available yet - this is normal, not an error
+            ESP_LOGD(TAG, "Fan %d%% %lu RPM | No new sensor data", speed, rpm);
+        } else {
+            handle_sensor_failure();
+            ESP_LOGI(TAG, "Fan %d%% %lu RPM | SEN55 error (failures: %lu)",
+                     speed, rpm, sensor_failures);
+        }
+
+        // Periodic health logging
+        if (loop_count % HEALTH_LOG_INTERVAL == 0) {
+            log_health_status();
+        }
+
+        // Periodic history auto-save (every 6 hours)
+        int64_t now_us = esp_timer_get_time();
+        if (now_us - last_history_save_us >= (int64_t)HISTORY_SAVE_INTERVAL_S * 1000000) {
+            ESP_LOGI(TAG, "Auto-saving history to flash...");
+            if (history_save() == ESP_OK) {
+                ESP_LOGI(TAG, "History auto-save complete");
+            } else {
+                ESP_LOGW(TAG, "History auto-save failed");
+            }
+            last_history_save_us = now_us;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(MONITOR_INTERVAL_MS));
+    }
+}
