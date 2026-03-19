@@ -8,6 +8,7 @@
 
 #include "ota_update.h"
 #include "history.h"
+#include "sen55.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_http_client.h"
@@ -217,6 +218,9 @@ static void ota_task(void *pvParameter)
         esp_http_client_cleanup(client);
     }
     free(buffer);
+
+    // Save VOC algorithm state before reboot (only effective after 3h uptime)
+    sen55_save_voc_state();
 
     // Save history again to preserve samples collected during download
     ESP_LOGI(TAG, "Saving history before reboot...");

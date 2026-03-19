@@ -48,6 +48,7 @@ static uint32_t loop_count = 0;
 static uint32_t sensor_failures = 0;
 static uint32_t fan_stall_retries = 0;
 static int64_t last_history_save_us = 0;  // Last auto-save timestamp
+static bool fan_clean_checked = false;    // One-time fan cleaning check done
 
 // =============================================================================
 // Health Logging
@@ -325,9 +326,26 @@ void app_main(void)
             log_health_status();
         }
 
+        // Periodic device status register check (~every 30s)
+        if (loop_count % 15 == 7) {
+            sen55_device_status_t dev_status;
+            sen55_read_device_status(&dev_status);
+        }
+
+        // One-time fan cleaning check after NTP sync
+        if (!fan_clean_checked && time_sync_is_synced()) {
+            fan_clean_checked = true;
+            if (sen55_check_fan_cleaning((uint32_t)time_sync_get_timestamp())) {
+                ESP_LOGI(TAG, "Fan cleaning triggered on boot");
+            }
+        }
+
         // Periodic history auto-save (every 6 hours)
         int64_t now_us = esp_timer_get_time();
         if (now_us - last_history_save_us >= (int64_t)HISTORY_SAVE_INTERVAL_S * 1000000) {
+            // Save VOC algorithm state alongside history (only effective after 3h uptime)
+            sen55_save_voc_state();
+
             ESP_LOGI(TAG, "Auto-saving history to flash...");
             if (history_save() == ESP_OK) {
                 ESP_LOGI(TAG, "History auto-save complete");

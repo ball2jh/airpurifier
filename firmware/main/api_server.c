@@ -699,6 +699,17 @@ static esp_err_t health_handler(httpd_req_t *req)
         cJSON_AddNumberToObject(busy, "last_uptime_ms", (double)sen_health.busy_events.last_uptime_ms);
     }
 
+    // Device status register flags
+    if (sen_health.device_status.valid) {
+        cJSON *dev_status = cJSON_AddObjectToObject(sensor, "device_status");
+        cJSON_AddBoolToObject(dev_status, "fan_speed_warning", sen_health.device_status.fan_speed_warning);
+        cJSON_AddBoolToObject(dev_status, "fan_cleaning", sen_health.device_status.fan_cleaning_active);
+        cJSON_AddBoolToObject(dev_status, "gas_sensor_error", sen_health.device_status.gas_sensor_error);
+        cJSON_AddBoolToObject(dev_status, "rht_error", sen_health.device_status.rht_error);
+        cJSON_AddBoolToObject(dev_status, "laser_failure", sen_health.device_status.laser_failure);
+        cJSON_AddBoolToObject(dev_status, "fan_failure", sen_health.device_status.fan_failure);
+    }
+
     // Fan health
     fan_health_t fan_health;
     fan_get_health(&fan_health);

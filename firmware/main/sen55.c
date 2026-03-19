@@ -20,6 +20,7 @@
 #include "freertos/semphr.h"
 #include "esp_timer.h"
 #include <string.h>
+#include "nvs.h"
 
 static const char *TAG = "sen55";
 
@@ -45,6 +46,8 @@ static const char *TAG = "sen55";
 #define CMD_READ_VALUES     0x03C4
 #define CMD_DEVICE_STATUS   0xD206
 #define CMD_RESET           0xD304
+#define CMD_START_FAN_CLEAN 0x5607
+#define CMD_VOC_STATE       0x6181  // Same address for get (read) and set (write)
 
 // CRC-8 polynomial (x^8 + x^5 + x^4 + 1)
 #define CRC8_POLYNOMIAL     0x31
@@ -54,6 +57,11 @@ static const char *TAG = "sen55";
 #define MAX_RETRIES         3       // Retries before bus recovery
 #define RETRY_DELAY_MS      50      // Initial retry delay
 #define MAX_CONSECUTIVE_FAILURES 10 // Failures before re-init
+
+// NVS namespace for persistent sensor state
+#define NVS_NAMESPACE       "sen55"
+#define NVS_KEY_VOC_STATE   "voc_state"
+#define NVS_KEY_LAST_CLEAN  "last_clean"
 
 // =============================================================================
 // State
@@ -280,6 +288,79 @@ static esp_err_t sen55_read_data_internal(uint8_t *data, size_t words)
     }
 }
 
+/**
+ * @brief Send a command with data words to the sensor
+ *
+ * Each data word is sent as 2 data bytes + 1 CRC byte.
+ */
+static esp_err_t sen55_write_data_internal(uint16_t cmd, const uint8_t *data, size_t words)
+{
+    size_t total = 2 + words * 3;
+    uint8_t buf[20];  // Max: 2 cmd + 4 words * 3 = 14
+    if (total > sizeof(buf)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    buf[0] = cmd >> 8;
+    buf[1] = cmd & 0xFF;
+
+    for (size_t i = 0; i < words; i++) {
+        buf[2 + i * 3]     = data[i * 2];
+        buf[2 + i * 3 + 1] = data[i * 2 + 1];
+        buf[2 + i * 3 + 2] = calc_crc8(&data[i * 2], 2);
+    }
+
+    esp_err_t ret;
+    for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        ret = i2c_master_transmit(dev_handle, buf, total, I2C_TIMEOUT_MS);
+        if (ret == ESP_OK) {
+            return ESP_OK;
+        }
+        if (attempt < MAX_RETRIES - 1) {
+            vTaskDelay(pdMS_TO_TICKS(RETRY_DELAY_MS * (attempt + 1)));
+        }
+    }
+
+    health.i2c_errors++;
+    return ret;
+}
+
+// =============================================================================
+// VOC Algorithm State Persistence
+// =============================================================================
+
+/**
+ * @brief Restore VOC algorithm state from NVS
+ *
+ * Must be called in idle mode (before start measurement) per datasheet.
+ * Reduces VOC index learning time from ~1 hour to ~15 minutes after reboot.
+ */
+static void restore_voc_state(void)
+{
+    nvs_handle_t nvs;
+    esp_err_t ret = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs);
+    if (ret != ESP_OK) {
+        return;  // No saved state — normal on first boot
+    }
+
+    uint8_t state[8];
+    size_t len = sizeof(state);
+    ret = nvs_get_blob(nvs, NVS_KEY_VOC_STATE, state, &len);
+    nvs_close(nvs);
+
+    if (ret != ESP_OK || len != sizeof(state)) {
+        return;
+    }
+
+    ret = sen55_write_data_internal(CMD_VOC_STATE, state, 4);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "VOC algorithm state restored from NVS");
+        vTaskDelay(pdMS_TO_TICKS(20));
+    } else {
+        ESP_LOGW(TAG, "VOC state restore failed: %s", esp_err_to_name(ret));
+    }
+}
+
 // =============================================================================
 // I2C Bus Initialization
 // =============================================================================
@@ -341,6 +422,9 @@ esp_err_t sen55_init(void)
     if (ret != ESP_OK) {
         return ret;
     }
+
+    // Restore VOC algorithm state from NVS (must be in idle mode, before start)
+    restore_voc_state();
 
     // Start measurement mode
     ret = sen55_start();
@@ -606,4 +690,164 @@ bool sen55_get_last_reading(sen55_data_t *data)
         return true;
     }
     return false;
+}
+
+// =============================================================================
+// Device Status & Maintenance
+// =============================================================================
+
+esp_err_t sen55_read_device_status(sen55_device_status_t *status)
+{
+    if (status == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!initialized || !dev_handle) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    memset(status, 0, sizeof(*status));
+
+    esp_err_t ret = sen55_send_cmd_internal(CMD_DEVICE_STATUS);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(20));
+
+    // Status register is 32-bit = 2 words (4 data bytes)
+    uint8_t data[4];
+    ret = sen55_read_data_internal(data, 2);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    status->raw = ((uint32_t)data[0] << 24) | ((uint32_t)data[1] << 16) |
+                  ((uint32_t)data[2] << 8) | data[3];
+    status->fan_speed_warning   = (status->raw >> 21) & 1;
+    status->fan_cleaning_active = (status->raw >> 19) & 1;
+    status->gas_sensor_error    = (status->raw >> 7) & 1;
+    status->rht_error           = (status->raw >> 6) & 1;
+    status->laser_failure       = (status->raw >> 5) & 1;
+    status->fan_failure         = (status->raw >> 4) & 1;
+    status->valid = true;
+
+    // Update health struct
+    taskENTER_CRITICAL(&health_spinlock);
+    health.device_status = *status;
+    taskEXIT_CRITICAL(&health_spinlock);
+
+    // Log any active error flags
+    if (status->fan_failure) {
+        ESP_LOGE(TAG, "Device status: Fan failure!");
+    }
+    if (status->laser_failure) {
+        ESP_LOGE(TAG, "Device status: Laser failure!");
+    }
+    if (status->gas_sensor_error) {
+        ESP_LOGE(TAG, "Device status: Gas sensor error");
+    }
+    if (status->rht_error) {
+        ESP_LOGW(TAG, "Device status: RHT communication error");
+    }
+    if (status->fan_speed_warning) {
+        ESP_LOGW(TAG, "Device status: Fan speed warning");
+    }
+    if (status->fan_cleaning_active) {
+        ESP_LOGI(TAG, "Device status: Fan cleaning in progress");
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t sen55_start_fan_cleaning(void)
+{
+    if (!initialized || !dev_handle) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    ESP_LOGI(TAG, "Starting manual fan cleaning cycle (~10s)");
+    return sen55_send_cmd_internal(CMD_START_FAN_CLEAN);
+}
+
+bool sen55_check_fan_cleaning(uint32_t current_unix_time)
+{
+    if (!initialized || current_unix_time == 0) {
+        return false;
+    }
+
+    nvs_handle_t nvs;
+    esp_err_t ret = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs);
+    if (ret != ESP_OK) {
+        return false;
+    }
+
+    uint32_t last_clean = 0;
+    nvs_get_u32(nvs, NVS_KEY_LAST_CLEAN, &last_clean);
+
+    bool needed = (last_clean == 0) || (current_unix_time - last_clean >= 604800);
+
+    if (needed) {
+        ESP_LOGI(TAG, "Fan cleaning needed (last: %lus ago)",
+                 last_clean ? (unsigned long)(current_unix_time - last_clean) : 0);
+        ret = sen55_start_fan_cleaning();
+        if (ret == ESP_OK) {
+            nvs_set_u32(nvs, NVS_KEY_LAST_CLEAN, current_unix_time);
+            nvs_commit(nvs);
+        }
+    }
+
+    nvs_close(nvs);
+    return needed;
+}
+
+esp_err_t sen55_save_voc_state(void)
+{
+    if (!initialized || !dev_handle) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    // Per datasheet: only save after >= 3 hours of continuous operation
+    int64_t uptime_s = esp_timer_get_time() / 1000000;
+    if (uptime_s < 10800) {
+        ESP_LOGD(TAG, "VOC state not saved (uptime %llds < 3h)", uptime_s);
+        return ESP_OK;
+    }
+
+    // Read VOC algorithm state (must be in measurement mode)
+    // Note: if called from non-main task (e.g., OTA), a concurrent sen55_read()
+    // may cause a transient I2C error on either side — both handle this gracefully
+    esp_err_t ret = sen55_send_cmd_internal(CMD_VOC_STATE);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(20));
+
+    uint8_t state[8];  // 4 words = 8 data bytes
+    ret = sen55_read_data_internal(state, 4);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    // Save to NVS
+    nvs_handle_t nvs;
+    ret = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs);
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "NVS open failed for VOC save: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = nvs_set_blob(nvs, NVS_KEY_VOC_STATE, state, sizeof(state));
+    if (ret == ESP_OK) {
+        ret = nvs_commit(nvs);
+    }
+    nvs_close(nvs);
+
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "VOC algorithm state saved to NVS");
+    } else {
+        ESP_LOGW(TAG, "VOC state save failed: %s", esp_err_to_name(ret));
+    }
+
+    return ret;
 }

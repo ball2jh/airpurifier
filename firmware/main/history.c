@@ -3,13 +3,13 @@
  * @brief Tiered historical data storage implementation
  *
  * Memory layout (all static, pre-allocated):
- * - Raw:     1800 samples × 40 bytes = 72,000 bytes (~1 hour @ 2s)
- * - Fine:    360 samples × 40 bytes  = 14,400 bytes (6 hours @ 1min)
- * - Medium:  144 samples × 40 bytes  =  5,760 bytes (24 hours @ 10min)
- * - Coarse:  168 samples × 40 bytes  =  6,720 bytes (7 days @ 1hr)
- * - Daily:   120 samples × 40 bytes  =  4,800 bytes (30 days @ 6hr)
- * - Archive: 1095 samples × 40 bytes = 43,800 bytes (3 years @ 24hr)
- * - Total:                           = 147,480 bytes (~144 KB)
+ * - Raw:     1800 samples × 36 bytes = 64,800 bytes (~1 hour @ 2s)
+ * - Fine:    360 samples × 36 bytes  = 12,960 bytes (6 hours @ 1min)
+ * - Medium:  144 samples × 36 bytes  =  5,184 bytes (24 hours @ 10min)
+ * - Coarse:  168 samples × 36 bytes  =  6,048 bytes (7 days @ 1hr)
+ * - Daily:   120 samples × 36 bytes  =  4,320 bytes (30 days @ 6hr)
+ * - Archive: 1095 samples × 36 bytes = 39,420 bytes (3 years @ 24hr)
+ * - Total:                           = 132,732 bytes (~130 KB)
  */
 
 #include "history.h"

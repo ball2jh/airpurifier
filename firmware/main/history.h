@@ -24,7 +24,7 @@
 #include "esp_err.h"
 
 /**
- * @brief Single data sample (40 bytes)
+ * @brief Single data sample (36 bytes)
  */
 typedef struct {
     uint32_t timestamp;     // Unix timestamp (seconds since boot or epoch)

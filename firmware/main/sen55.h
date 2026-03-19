@@ -56,6 +56,20 @@ typedef struct {
 } sen55_busy_diag_t;
 
 /**
+ * @brief SEN55 device status register flags (datasheet Section 5.4)
+ */
+typedef struct {
+    bool fan_speed_warning;    // Bit 21: Fan not running at expected speed
+    bool fan_cleaning_active;  // Bit 19: Fan cleaning in progress
+    bool gas_sensor_error;     // Bit 7: Gas sensor error
+    bool rht_error;            // Bit 6: RHT communication error
+    bool laser_failure;        // Bit 5: Laser failure
+    bool fan_failure;          // Bit 4: Fan not running
+    uint32_t raw;              // Raw 32-bit register value
+    bool valid;                // Whether status was successfully read
+} sen55_device_status_t;
+
+/**
  * @brief SEN55 health status structure
  */
 typedef struct {
@@ -68,6 +82,7 @@ typedef struct {
     bool is_healthy;                // Current health status
     sen55_crc_error_t last_crc_error; // Details of last CRC error
     sen55_busy_diag_t busy_events;  // Sensor busy (0xFFFF) tracking
+    sen55_device_status_t device_status;  // Last device status register reading
 } sen55_health_t;
 
 /**
@@ -144,5 +159,46 @@ void sen55_get_health(sen55_health_t *health);
  * @brief Reset health statistics counters
  */
 void sen55_reset_health(void);
+
+/**
+ * @brief Read the device status register
+ *
+ * Returns error flags: fan failure, laser failure, gas sensor error, etc.
+ * Also updates the device_status field in the health struct.
+ *
+ * @param status Pointer to structure to receive status flags
+ * @return ESP_OK on success
+ */
+esp_err_t sen55_read_device_status(sen55_device_status_t *status);
+
+/**
+ * @brief Trigger manual fan cleaning cycle
+ *
+ * Fan runs at max speed for ~10 seconds. Readings are stale during cleaning.
+ *
+ * @return ESP_OK on success
+ */
+esp_err_t sen55_start_fan_cleaning(void);
+
+/**
+ * @brief Check if fan cleaning is needed and trigger if overdue
+ *
+ * Compares current time against last cleaning time stored in NVS.
+ * Triggers cleaning if more than 1 week (604800s) has elapsed.
+ *
+ * @param current_unix_time Current Unix timestamp (from NTP)
+ * @return true if cleaning was triggered
+ */
+bool sen55_check_fan_cleaning(uint32_t current_unix_time);
+
+/**
+ * @brief Save VOC algorithm state to NVS
+ *
+ * Per datasheet, only meaningful after >= 3 hours of continuous operation.
+ * Should be called periodically and before OTA/reboot.
+ *
+ * @return ESP_OK on success, or ESP_OK (no-op) if uptime < 3 hours
+ */
+esp_err_t sen55_save_voc_state(void);
 
 #endif // SEN55_H

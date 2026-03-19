@@ -7,7 +7,7 @@ ESP32 environmental controller using ESP-IDF v5.5. Controls PWM fans and monitor
 - **Board:** Hosyond ESP32S (ESP-WROOM-32 module)
 - **Chip:** ESP32 dual-core @ 240 MHz
 - **RAM:** 512 KB
-- **Flash:** 512 KB (on-module)
+- **Flash:** 4 MB (on-module)
 - **USB:** USB-C via CP2102 bridge
 - **WiFi:** 802.11 b/g/n (AP/STA/AP+STA)
 - **Bluetooth:** Classic + BLE
