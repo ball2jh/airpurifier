@@ -364,7 +364,7 @@ function Dashboard() {
     }`;
 
   return (
-    <div className="min-h-screen p-4 pb-12 md:p-6 lg:p-8 max-w-5xl lg:max-w-6xl mx-auto">
+    <div className="min-h-screen p-4 pb-12 md:p-6 lg:p-8 max-w-5xl lg:max-w-6xl mx-auto overflow-x-hidden">
       <header className="flex items-center justify-between mb-6 gap-3">
         <div className="flex items-center gap-2">
           <h1 className="text-base md:text-xl font-semibold text-text truncate">Air Purifier</h1>

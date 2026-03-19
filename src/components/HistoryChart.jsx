@@ -291,7 +291,7 @@ export default function HistoryChart({ tier, setTier, visibleMetrics, setVisible
           </button>
 
           {/* Tier Selector */}
-          <div className="relative">
+          <div className="relative min-w-0">
             <div className="pointer-events-none absolute inset-y-0 left-0 w-4 bg-gradient-to-r from-mantle to-transparent rounded-l-lg z-10 sm:hidden" />
             <div className="pointer-events-none absolute inset-y-0 right-0 w-4 bg-gradient-to-l from-mantle to-transparent rounded-r-lg z-10 sm:hidden" />
             <div className="flex gap-0.5 bg-mantle rounded-lg p-1 overflow-x-auto no-scrollbar">
