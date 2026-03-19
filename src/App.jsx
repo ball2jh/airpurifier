@@ -319,13 +319,17 @@ function Dashboard() {
     return (
       <div className="min-h-screen p-4 md:p-6 lg:p-8 max-w-5xl lg:max-w-6xl mx-auto">
         <div className="flex items-center justify-between mb-6">
-          <div className="skeleton h-6 w-32" />
+          <div className="flex items-center gap-2">
+            <span className="text-base md:text-xl font-semibold text-text">Air Purifier</span>
+            <span className="w-2 h-2 rounded-full bg-yellow animate-pulse" />
+          </div>
           <div className="flex gap-2">
             <div className="skeleton h-8 w-20" />
             <div className="skeleton h-8 w-16" />
             <div className="skeleton h-8 w-12" />
           </div>
         </div>
+        <p className="text-sm text-overlay mb-4 animate-pulse">Connecting to device...</p>
         <div className="skeleton h-64 w-full mb-4" />
         <div className="skeleton h-40 w-full mb-4" />
         <div className="grid grid-cols-2 gap-4 mb-4">
