@@ -10,6 +10,7 @@ import {
   Legend,
   ResponsiveContainer
 } from 'recharts';
+import { RotateCcw } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { calculateAQI } from './AQICard';
 import { useTemperatureUnit, convertTemp, tempUnit } from '@/utils/temperature';
@@ -92,6 +93,9 @@ export const METRIC_GROUPS = [
 export const ALL_METRICS = METRIC_GROUPS.flatMap(g => g.metrics.map(m => ({ ...m, group: g.name, unit: m.unit || g.unit, yAxis: g.yAxis })));
 
 const RANGE_METRICS = new Set(['pm1_0', 'pm2_5', 'pm4_0', 'pm10', 'humidity', 'temperature', 'voc_index', 'nox_index']);
+
+export const DEFAULT_TIER = 'fine';
+export const DEFAULT_METRICS = ['pm2_5'];
 
 function formatTimestamp(unixSeconds, tier, forTooltip = false) {
   const date = new Date(unixSeconds * 1000);
@@ -358,6 +362,20 @@ export default function HistoryChart({ tier, setTier, visibleMetrics, setVisible
             title="Normalize all metrics to 0-100% for comparison"
           >
             {windowWidth < 640 ? '%' : 'Normalize'}
+          </button>
+
+          {/* Reset to defaults */}
+          <button
+            onClick={() => {
+              setTier(DEFAULT_TIER);
+              setVisibleMetrics(DEFAULT_METRICS);
+              setNormalized(false);
+              setAutoScale(false);
+            }}
+            className="p-2.5 sm:p-2 rounded-lg sm:rounded-md bg-surface text-subtext hover:text-text transition-colors"
+            title="Reset to defaults"
+          >
+            <RotateCcw className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
           </button>
 
           {/* Tier Selector */}

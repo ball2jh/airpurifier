@@ -212,6 +212,13 @@ export default function RelativeAirQuality({ rawSamples = [], fineSamples = [], 
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Trend indicator — fixed width so buttons don't shift */}
+            <div className={`w-5 flex items-center justify-center ${hasData ? colors.text : ''}`}>
+              {hasData && analysis.percentile <= 40 && <TrendingDown className="w-4 h-4" />}
+              {hasData && analysis.percentile > 40 && analysis.percentile < 60 && <Minus className="w-4 h-4" />}
+              {hasData && analysis.percentile >= 60 && <TrendingUp className="w-4 h-4" />}
+            </div>
+
             {/* Timespan selector */}
             <div className="flex gap-0.5 bg-mantle rounded-lg p-1 overflow-x-auto no-scrollbar">
               {TIMESPAN_OPTIONS.map(t => (
@@ -228,14 +235,6 @@ export default function RelativeAirQuality({ rawSamples = [], fineSamples = [], 
                 </button>
               ))}
             </div>
-
-            {hasData && (
-              <div className={`flex items-center gap-1 ${colors.text}`}>
-                {analysis.percentile <= 40 && <TrendingDown className="w-4 h-4" />}
-                {analysis.percentile > 40 && analysis.percentile < 60 && <Minus className="w-4 h-4" />}
-                {analysis.percentile >= 60 && <TrendingUp className="w-4 h-4" />}
-              </div>
-            )}
           </div>
         </div>
 

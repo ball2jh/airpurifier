@@ -8,7 +8,7 @@ import SecondaryMetric from './components/SecondaryMetric';
 import PMDetails from './components/PMDetails';
 import EnvironmentStrip from './components/EnvironmentStrip';
 import FanControl from './components/FanControl';
-import HistoryChart, { TIERS } from './components/HistoryChart';
+import HistoryChart, { TIERS, DEFAULT_TIER, DEFAULT_METRICS } from './components/HistoryChart';
 import RelativeAirQuality from './components/RelativeAirQuality';
 import StatisticsSummaryCard from './components/StatisticsSummaryCard';
 import PeakEventsCard from './components/PeakEventsCard';
@@ -201,8 +201,8 @@ function Dashboard() {
   const lastValidSensor = useRef(null);
 
   // History state (shared with HistoryChart and summary cards)
-  const [historyTier, setHistoryTier] = useState('fine');
-  const [visibleMetrics, setVisibleMetrics] = useState(['pm2_5']);
+  const [historyTier, setHistoryTier] = useState(DEFAULT_TIER);
+  const [visibleMetrics, setVisibleMetrics] = useState(DEFAULT_METRICS);
 
   const { data: status, isLoading, error, isFetching } = useQuery({
     queryKey: ['status'],
