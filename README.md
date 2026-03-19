@@ -1,6 +1,6 @@
-# ESP32 Environmental Controller
+# airpurifier
 
-An ESP32-based air quality monitor and fan controller built with ESP-IDF v5.5. Designed for **2+ years of unattended operation** with automatic error recovery, OTA updates, and a REST API for monitoring and control.
+An ESP32-based air quality monitor and fan controller built with ESP-IDF v5.5. Designed for **2+ years of unattended operation** with automatic error recovery, OTA updates, and a REST API for monitoring and control. See [airpurifier-ui](https://github.com/ball2jh/airpurifier-ui) for the web dashboard.
 
 Reads air quality data from a **Sensirion SEN55** sensor (PM1.0, PM2.5, PM4.0, PM10, temperature, humidity, VOC, NOx) and automatically adjusts PWM fan speed based on particulate levels.
 
@@ -41,8 +41,8 @@ ESP32 GPIO 22  <->  SEN55 SCL (external 10K pull-up)
 
 ```bash
 # Clone this repo
-git clone https://github.com/ball2jh/esp32-env-controller.git
-cd esp32-env-controller
+git clone https://github.com/ball2jh/airpurifier.git
+cd airpurifier
 
 # Clone ESP-IDF into the project (or symlink your existing installation)
 git clone --recursive https://github.com/espressif/esp-idf.git -b v5.5
