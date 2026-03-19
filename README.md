@@ -175,6 +175,13 @@ partitions.csv       Custom partition table
 sdkconfig            ESP-IDF build configuration
 ```
 
+## Related Projects
+
+| Repository | Description |
+|------------|-------------|
+| [airpurifier-collector](https://github.com/ball2jh/airpurifier-collector) | Host-side history collector — long-term SQLite storage and archive API |
+| [airpurifier-ui](https://github.com/ball2jh/airpurifier-ui) | Web dashboard — real-time monitoring and history charts |
+
 ## License
 
 MIT
