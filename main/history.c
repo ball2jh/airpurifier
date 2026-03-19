@@ -13,9 +13,15 @@
  */
 
 #include "history.h"
+#include <assert.h>
 #include "time_sync.h"
+
+_Static_assert(sizeof(history_sample_t) == 36,
+               "history_sample_t size changed — update binary decoder and wire format");
 #include "esp_log.h"
 #include "esp_partition.h"
+#include "esp_rom_crc.h"
+#include "esp_task_wdt.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -584,6 +590,44 @@ void history_get_stats(history_stats_t *stats)
     xSemaphoreGive(history_mutex);
 }
 
+uint32_t history_get_samples_since(history_tier_t tier, uint32_t since_ts)
+{
+    if (!initialized || tier >= TIER_COUNT) {
+        return 0;
+    }
+
+    // since_ts == 0 means "return all samples"
+    if (since_ts == 0) {
+        return 0;
+    }
+
+    if (xSemaphoreTake(history_mutex, HISTORY_MUTEX_TIMEOUT) != pdTRUE) {
+        return 0;
+    }
+
+    tier_state_t *t = &tiers[tier];
+    uint32_t count = t->count;
+
+    if (count == 0) {
+        xSemaphoreGive(history_mutex);
+        return 0;
+    }
+
+    // Backward scan from newest — typical case checks only 2-3 samples
+    history_sample_t sample;
+    for (int32_t i = (int32_t)count - 1; i >= 0; i--) {
+        if (tier_get(tier, (uint32_t)i, &sample)) {
+            if (sample.timestamp <= since_ts) {
+                xSemaphoreGive(history_mutex);
+                return (uint32_t)(i + 1);  // First sample newer than since_ts
+            }
+        }
+    }
+
+    xSemaphoreGive(history_mutex);
+    return 0;  // All samples are newer than since_ts
+}
+
 void history_clear(void)
 {
     if (!initialized) return;
@@ -610,40 +654,162 @@ void history_clear(void)
 }
 
 // =============================================================================
-// Flash Persistence
+// Flash Persistence — A/B Ping-Pong with CRC32
 // =============================================================================
 
 #define HISTORY_MAGIC       0x48495354  // "HIST"
-#define HISTORY_VERSION     2
+#define HISTORY_VERSION     1
 
-// Header stored at start of partition
+#define SLOT_SIZE           (33 * 4096)     // 135168 bytes = 132KB
+#define SLOT_A_OFFSET       0
+#define SLOT_B_OFFSET       SLOT_SIZE
+#define SECTOR_SIZE         4096
+
 typedef struct {
-    uint32_t magic;
-    uint32_t version;
+    uint32_t magic;                     // 0x48495354 "HIST"
+    uint32_t version;                   // 3
+    uint32_t save_seq;                  // Monotonically increasing sequence number
     uint32_t total_samples;
     uint32_t total_compactions;
     uint32_t accumulator_count;
-    // Tier state (head, count, compactions for each tier)
     struct {
         uint32_t head;
         uint32_t count;
         uint32_t compactions;
         uint32_t pushes_since_compact;
-    } tier_state[TIER_COUNT];
-    uint32_t checksum;  // Simple checksum of header
+    } tier_state[TIER_COUNT];           // 6 × 16 = 96 bytes
+    uint32_t accum_crc;                 // CRC32 of accumulator data
+    uint32_t tier_crc[TIER_COUNT];      // CRC32 of each tier buffer
+    uint32_t header_crc;                // CRC32 of bytes 0..sizeof-4 (must be last)
 } history_flash_header_t;
 
-static uint32_t calc_checksum(const history_flash_header_t *hdr)
+_Static_assert(sizeof(history_flash_header_t) == 152,
+               "history_flash_header_t size changed — update flash layout");
+
+_Static_assert(sizeof(history_flash_header_t) + sizeof(fine_accumulator_t) +
+               sizeof(raw_buffer) + sizeof(fine_buffer) + sizeof(medium_buffer) +
+               sizeof(coarse_buffer) + sizeof(daily_buffer) + sizeof(archive_buffer)
+               <= SLOT_SIZE,
+               "Save data exceeds slot size");
+
+static uint32_t calc_header_crc(const history_flash_header_t *hdr)
 {
-    // Simple checksum: sum all fields except checksum itself
-    const uint32_t *data = (const uint32_t *)hdr;
-    uint32_t sum = 0;
-    // Sum all uint32_t fields except the last one (checksum)
-    size_t count = (sizeof(history_flash_header_t) - sizeof(uint32_t)) / sizeof(uint32_t);
-    for (size_t i = 0; i < count; i++) {
-        sum += data[i];
+    return esp_rom_crc32_le(0, (const uint8_t *)hdr,
+                            sizeof(*hdr) - sizeof(uint32_t));
+}
+
+static uint32_t calc_data_crc(const void *data, size_t len)
+{
+    return esp_rom_crc32_le(0, (const uint8_t *)data, len);
+}
+
+static bool read_and_validate_slot(const esp_partition_t *part, size_t offset,
+                                   history_flash_header_t *out_header)
+{
+    if (esp_partition_read(part, offset, out_header, sizeof(*out_header)) != ESP_OK) {
+        return false;
     }
-    return sum;
+    if (out_header->magic != HISTORY_MAGIC) return false;
+    if (out_header->version != HISTORY_VERSION) return false;
+    if (out_header->header_crc != calc_header_crc(out_header)) return false;
+    return true;
+}
+
+static void clear_buffers(void)
+{
+    memset(raw_buffer, 0, sizeof(raw_buffer));
+    memset(fine_buffer, 0, sizeof(fine_buffer));
+    memset(medium_buffer, 0, sizeof(medium_buffer));
+    memset(coarse_buffer, 0, sizeof(coarse_buffer));
+    memset(daily_buffer, 0, sizeof(daily_buffer));
+    memset(archive_buffer, 0, sizeof(archive_buffer));
+    memset(&accumulator, 0, sizeof(accumulator));
+}
+
+/**
+ * @brief Try to restore history data from a specific slot
+ *
+ * Reads and verifies all data CRCs, validates bounds, then applies state.
+ * On failure, buffers may be partially overwritten — caller must clear before retry.
+ */
+static esp_err_t try_restore_from_slot(const esp_partition_t *part, size_t slot_offset,
+                                       const history_flash_header_t *hdr,
+                                       const char *slot_name)
+{
+    size_t offset = slot_offset + sizeof(*hdr);
+    esp_err_t ret;
+
+    // Read and verify accumulator
+    ret = esp_partition_read(part, offset, &accumulator, sizeof(accumulator));
+    if (ret != ESP_OK) return ret;
+    if (hdr->accum_crc != calc_data_crc(&accumulator, sizeof(accumulator))) {
+        ESP_LOGW(TAG, "Slot %s: accumulator CRC mismatch", slot_name);
+        return ESP_ERR_INVALID_CRC;
+    }
+    offset += sizeof(accumulator);
+
+    // Read and verify each tier buffer
+    struct { void *buffer; size_t size; const char *name; } bufs[] = {
+        {raw_buffer,     sizeof(raw_buffer),     "raw"},
+        {fine_buffer,    sizeof(fine_buffer),     "fine"},
+        {medium_buffer,  sizeof(medium_buffer),   "medium"},
+        {coarse_buffer,  sizeof(coarse_buffer),   "coarse"},
+        {daily_buffer,   sizeof(daily_buffer),    "daily"},
+        {archive_buffer, sizeof(archive_buffer),  "archive"},
+    };
+
+    for (int i = 0; i < TIER_COUNT; i++) {
+        ret = esp_partition_read(part, offset, bufs[i].buffer, bufs[i].size);
+        if (ret != ESP_OK) return ret;
+        if (hdr->tier_crc[i] != calc_data_crc(bufs[i].buffer, bufs[i].size)) {
+            ESP_LOGW(TAG, "Slot %s: %s tier CRC mismatch", slot_name, bufs[i].name);
+            return ESP_ERR_INVALID_CRC;
+        }
+        offset += bufs[i].size;
+    }
+
+    // Bounds validation (CRC passed, but values might be out of range)
+    for (int i = 0; i < TIER_COUNT; i++) {
+        if (hdr->tier_state[i].head >= tiers[i].capacity) {
+            ESP_LOGW(TAG, "Slot %s: tier %d head out of bounds (%lu >= %lu)",
+                     slot_name, i, hdr->tier_state[i].head, tiers[i].capacity);
+            return ESP_ERR_INVALID_SIZE;
+        }
+        if (hdr->tier_state[i].count > tiers[i].capacity) {
+            ESP_LOGW(TAG, "Slot %s: tier %d count out of bounds (%lu > %lu)",
+                     slot_name, i, hdr->tier_state[i].count, tiers[i].capacity);
+            return ESP_ERR_INVALID_SIZE;
+        }
+    }
+    if (hdr->accumulator_count >= RAW_TO_FINE_RATIO) {
+        ESP_LOGW(TAG, "Slot %s: accumulator_count out of bounds (%lu)",
+                 slot_name, hdr->accumulator_count);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    // Soft check for pushes_since_compact (warn but don't reject)
+    for (int i = 0; i < TIER_COUNT; i++) {
+        if (tiers[i].compact_ratio > 0 &&
+            hdr->tier_state[i].pushes_since_compact >= tiers[i].compact_ratio) {
+            ESP_LOGW(TAG, "Slot %s: tier %d pushes_since_compact=%lu (ratio=%lu)",
+                     slot_name, i, hdr->tier_state[i].pushes_since_compact,
+                     tiers[i].compact_ratio);
+        }
+    }
+
+    // Apply validated state to in-memory structs
+    total_samples = hdr->total_samples;
+    total_compactions = hdr->total_compactions;
+    accumulator_count = hdr->accumulator_count;
+
+    for (int i = 0; i < TIER_COUNT; i++) {
+        tiers[i].head = hdr->tier_state[i].head;
+        tiers[i].count = hdr->tier_state[i].count;
+        tiers[i].compactions = hdr->tier_state[i].compactions;
+        tiers[i].pushes_since_compact = hdr->tier_state[i].pushes_since_compact;
+    }
+
+    return ESP_OK;
 }
 
 esp_err_t history_save(void)
@@ -659,7 +825,6 @@ esp_err_t history_save(void)
 
     esp_err_t ret = ESP_OK;
 
-    // Find the history partition
     const esp_partition_t *part = esp_partition_find_first(
         ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "history");
     if (part == NULL) {
@@ -668,19 +833,35 @@ esp_err_t history_save(void)
         goto save_done;
     }
 
-    ESP_LOGI(TAG, "Saving history to flash (%lu bytes partition)", (unsigned long)part->size);
+    // Read both slot headers to determine which slot to write
+    history_flash_header_t hdr_a, hdr_b;
+    bool valid_a = read_and_validate_slot(part, SLOT_A_OFFSET, &hdr_a);
+    bool valid_b = read_and_validate_slot(part, SLOT_B_OFFSET, &hdr_b);
 
-    // Erase partition
-    ret = esp_partition_erase_range(part, 0, part->size);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to erase partition: %s", esp_err_to_name(ret));
-        goto save_done;
+    uint32_t seq_a = valid_a ? hdr_a.save_seq : 0;
+    uint32_t seq_b = valid_b ? hdr_b.save_seq : 0;
+
+    // Pick the inactive slot (opposite of higher save_seq)
+    size_t target_offset;
+    const char *slot_name;
+    if (!valid_a && !valid_b) {
+        target_offset = SLOT_A_OFFSET;
+        slot_name = "A";
+    } else if (seq_a >= seq_b) {
+        target_offset = SLOT_B_OFFSET;
+        slot_name = "B";
+    } else {
+        target_offset = SLOT_A_OFFSET;
+        slot_name = "A";
     }
+
+    uint32_t new_seq = (seq_a > seq_b ? seq_a : seq_b) + 1;
 
     // Prepare header
     history_flash_header_t header = {
         .magic = HISTORY_MAGIC,
         .version = HISTORY_VERSION,
+        .save_seq = new_seq,
         .total_samples = total_samples,
         .total_compactions = total_compactions,
         .accumulator_count = accumulator_count,
@@ -693,50 +874,74 @@ esp_err_t history_save(void)
         header.tier_state[i].pushes_since_compact = tiers[i].pushes_since_compact;
     }
 
-    header.checksum = calc_checksum(&header);
+    // Compute data CRCs
+    header.accum_crc = calc_data_crc(&accumulator, sizeof(accumulator));
 
-    // Write header
-    size_t offset = 0;
-    ret = esp_partition_write(part, offset, &header, sizeof(header));
+    struct { void *buffer; size_t size; const char *name; } bufs[] = {
+        {raw_buffer,     sizeof(raw_buffer),     "raw"},
+        {fine_buffer,    sizeof(fine_buffer),     "fine"},
+        {medium_buffer,  sizeof(medium_buffer),   "medium"},
+        {coarse_buffer,  sizeof(coarse_buffer),   "coarse"},
+        {daily_buffer,   sizeof(daily_buffer),    "daily"},
+        {archive_buffer, sizeof(archive_buffer),  "archive"},
+    };
+
+    for (int i = 0; i < TIER_COUNT; i++) {
+        header.tier_crc[i] = calc_data_crc(bufs[i].buffer, bufs[i].size);
+    }
+
+    header.header_crc = calc_header_crc(&header);
+
+    // Sector-by-sector erase of target slot (not full-partition erase)
+    ESP_LOGI(TAG, "Saving history to slot %s (seq=%lu)", slot_name, new_seq);
+    for (size_t s = 0; s < SLOT_SIZE; s += SECTOR_SIZE) {
+        ret = esp_partition_erase_range(part, target_offset + s, SECTOR_SIZE);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to erase sector at 0x%x: %s",
+                     (unsigned)(target_offset + s), esp_err_to_name(ret));
+            goto save_done;
+        }
+        esp_task_wdt_reset();
+    }
+
+    // Write header + accumulator + tier buffers sequentially
+    size_t write_offset = target_offset;
+    ret = esp_partition_write(part, write_offset, &header, sizeof(header));
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to write header: %s", esp_err_to_name(ret));
         goto save_done;
     }
-    offset += sizeof(header);
+    write_offset += sizeof(header);
 
-    // Write accumulator
-    ret = esp_partition_write(part, offset, &accumulator, sizeof(accumulator));
+    ret = esp_partition_write(part, write_offset, &accumulator, sizeof(accumulator));
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to write accumulator: %s", esp_err_to_name(ret));
         goto save_done;
     }
-    offset += sizeof(accumulator);
-
-    // Write each tier's buffer
-    struct {
-        void *buffer;
-        size_t size;
-        const char *name;
-    } buffers[] = {
-        {raw_buffer, sizeof(raw_buffer), "raw"},
-        {fine_buffer, sizeof(fine_buffer), "fine"},
-        {medium_buffer, sizeof(medium_buffer), "medium"},
-        {coarse_buffer, sizeof(coarse_buffer), "coarse"},
-        {daily_buffer, sizeof(daily_buffer), "daily"},
-        {archive_buffer, sizeof(archive_buffer), "archive"},
-    };
+    write_offset += sizeof(accumulator);
 
     for (int i = 0; i < TIER_COUNT; i++) {
-        ret = esp_partition_write(part, offset, buffers[i].buffer, buffers[i].size);
+        ret = esp_partition_write(part, write_offset, bufs[i].buffer, bufs[i].size);
         if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to write %s buffer: %s", buffers[i].name, esp_err_to_name(ret));
+            ESP_LOGE(TAG, "Failed to write %s buffer: %s",
+                     bufs[i].name, esp_err_to_name(ret));
             goto save_done;
         }
-        ESP_LOGD(TAG, "Wrote %s: %zu bytes at offset %zu", buffers[i].name, buffers[i].size, offset);
-        offset += buffers[i].size;
+        write_offset += bufs[i].size;
+        esp_task_wdt_reset();
     }
 
-    ESP_LOGI(TAG, "History saved: %lu samples, %zu bytes written", total_samples, offset);
+    // Read-back header and verify CRC
+    history_flash_header_t verify_hdr;
+    ret = esp_partition_read(part, target_offset, &verify_hdr, sizeof(verify_hdr));
+    if (ret != ESP_OK || verify_hdr.header_crc != calc_header_crc(&verify_hdr)) {
+        ESP_LOGE(TAG, "Header read-back verification failed");
+        ret = ESP_ERR_INVALID_CRC;
+        goto save_done;
+    }
+
+    ESP_LOGI(TAG, "History saved to slot %s, seq=%lu (%lu samples, %zu bytes)",
+             slot_name, new_seq, total_samples, write_offset - target_offset);
 
 save_done:
     xSemaphoreGive(history_mutex);
@@ -750,9 +955,8 @@ esp_err_t history_restore(void)
         return ESP_ERR_TIMEOUT;
     }
 
-    esp_err_t ret = ESP_OK;
+    esp_err_t ret;
 
-    // Find the history partition
     const esp_partition_t *part = esp_partition_find_first(
         ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "history");
     if (part == NULL) {
@@ -761,88 +965,71 @@ esp_err_t history_restore(void)
         goto restore_done;
     }
 
-    // Read header
-    history_flash_header_t header;
-    ret = esp_partition_read(part, 0, &header, sizeof(header));
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to read header: %s", esp_err_to_name(ret));
-        goto restore_done;
-    }
+    // Read and validate both slot headers
+    history_flash_header_t hdr_a, hdr_b;
+    bool valid_a = read_and_validate_slot(part, SLOT_A_OFFSET, &hdr_a);
+    bool valid_b = read_and_validate_slot(part, SLOT_B_OFFSET, &hdr_b);
 
-    // Validate magic and version
-    if (header.magic != HISTORY_MAGIC) {
-        ESP_LOGI(TAG, "No saved history found (magic mismatch)");
+    if (!valid_a && !valid_b) {
+        ESP_LOGI(TAG, "No valid slots found, starting fresh");
         ret = ESP_ERR_NOT_FOUND;
         goto restore_done;
     }
 
-    if (header.version != HISTORY_VERSION) {
-        ESP_LOGW(TAG, "History version mismatch (got %lu, expected %d)",
-                 header.version, HISTORY_VERSION);
-        ret = ESP_ERR_INVALID_VERSION;
+    // Determine primary (higher seq) and fallback slots
+    size_t primary_offset = SLOT_A_OFFSET, fallback_offset = SLOT_B_OFFSET;
+    history_flash_header_t *primary_hdr = &hdr_a, *fallback_hdr = &hdr_b;
+    const char *primary_name = "A", *fallback_name = "B";
+    bool has_fallback = false;
+
+    if (valid_a && valid_b) {
+        has_fallback = true;
+        if (hdr_b.save_seq > hdr_a.save_seq) {
+            primary_offset = SLOT_B_OFFSET;  primary_hdr = &hdr_b;  primary_name = "B";
+            fallback_offset = SLOT_A_OFFSET; fallback_hdr = &hdr_a; fallback_name = "A";
+        }
+    } else if (valid_b) {
+        primary_offset = SLOT_B_OFFSET;
+        primary_hdr = &hdr_b;
+        primary_name = "B";
+    }
+
+    // Try primary slot
+    ret = try_restore_from_slot(part, primary_offset, primary_hdr, primary_name);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "History restored from slot %s, seq=%lu (%lu samples)",
+                 primary_name, primary_hdr->save_seq, total_samples);
+        for (int i = 0; i < TIER_COUNT; i++) {
+            if (tiers[i].count > 0) {
+                ESP_LOGI(TAG, "  Tier %d: %lu samples", i, tiers[i].count);
+            }
+        }
         goto restore_done;
     }
 
-    // Validate checksum
-    uint32_t expected_checksum = calc_checksum(&header);
-    if (header.checksum != expected_checksum) {
-        ESP_LOGW(TAG, "History checksum mismatch");
-        ret = ESP_ERR_INVALID_CRC;
-        goto restore_done;
-    }
+    ESP_LOGW(TAG, "Slot %s restore failed: %s", primary_name, esp_err_to_name(ret));
 
-    ESP_LOGI(TAG, "Restoring history from flash (%lu samples)", header.total_samples);
-
-    // Read accumulator
-    size_t offset = sizeof(header);
-    ret = esp_partition_read(part, offset, &accumulator, sizeof(accumulator));
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to read accumulator: %s", esp_err_to_name(ret));
-        goto restore_done;
-    }
-    offset += sizeof(accumulator);
-
-    // Read each tier's buffer
-    struct {
-        void *buffer;
-        size_t size;
-        const char *name;
-    } buffers[] = {
-        {raw_buffer, sizeof(raw_buffer), "raw"},
-        {fine_buffer, sizeof(fine_buffer), "fine"},
-        {medium_buffer, sizeof(medium_buffer), "medium"},
-        {coarse_buffer, sizeof(coarse_buffer), "coarse"},
-        {daily_buffer, sizeof(daily_buffer), "daily"},
-        {archive_buffer, sizeof(archive_buffer), "archive"},
-    };
-
-    for (int i = 0; i < TIER_COUNT; i++) {
-        ret = esp_partition_read(part, offset, buffers[i].buffer, buffers[i].size);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to read %s buffer: %s", buffers[i].name, esp_err_to_name(ret));
+    // Try fallback slot
+    if (has_fallback) {
+        clear_buffers();
+        ret = try_restore_from_slot(part, fallback_offset, fallback_hdr, fallback_name);
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "History restored from fallback slot %s, seq=%lu (%lu samples)",
+                     fallback_name, fallback_hdr->save_seq, total_samples);
+            for (int i = 0; i < TIER_COUNT; i++) {
+                if (tiers[i].count > 0) {
+                    ESP_LOGI(TAG, "  Tier %d: %lu samples", i, tiers[i].count);
+                }
+            }
             goto restore_done;
         }
-        offset += buffers[i].size;
+        ESP_LOGW(TAG, "Fallback slot %s also failed: %s",
+                 fallback_name, esp_err_to_name(ret));
     }
 
-    // Restore state
-    total_samples = header.total_samples;
-    total_compactions = header.total_compactions;
-    accumulator_count = header.accumulator_count;
-
-    for (int i = 0; i < TIER_COUNT; i++) {
-        tiers[i].head = header.tier_state[i].head;
-        tiers[i].count = header.tier_state[i].count;
-        tiers[i].compactions = header.tier_state[i].compactions;
-        tiers[i].pushes_since_compact = header.tier_state[i].pushes_since_compact;
-    }
-
-    ESP_LOGI(TAG, "History restored: %lu samples", total_samples);
-    for (int i = 0; i < TIER_COUNT; i++) {
-        if (tiers[i].count > 0) {
-            ESP_LOGI(TAG, "  Tier %d: %lu samples", i, tiers[i].count);
-        }
-    }
+    // Both slots failed — clear and start fresh
+    clear_buffers();
+    ret = ESP_ERR_NOT_FOUND;
 
 restore_done:
     xSemaphoreGive(history_mutex);

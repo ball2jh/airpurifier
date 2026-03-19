@@ -17,6 +17,7 @@
 #include "wifi.h"
 #include "ota_update.h"
 #include "time_sync.h"
+#include "esp_system.h"
 #include <string.h>
 #include <stdlib.h>
 #include <inttypes.h>
@@ -118,7 +119,7 @@ static const uint32_t view_time_windows[TIER_COUNT] = {
 /**
  * @brief Output a single sample as CSV line
  */
-static void output_csv_sample(httpd_req_t *req, const history_sample_t *s, char *line_buf, size_t buf_size)
+static esp_err_t output_csv_sample(httpd_req_t *req, const history_sample_t *s, char *line_buf, size_t buf_size)
 {
     int len = snprintf(line_buf, buf_size,
         "%lu,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%d,%d,%u,%u\n",
@@ -127,7 +128,7 @@ static void output_csv_sample(httpd_req_t *req, const history_sample_t *s, char 
         s->humidity, s->temperature,
         s->voc_index, s->nox_index,
         s->fan_rpm, s->fan_speed);
-    httpd_resp_send_chunk(req, line_buf, len);
+    return httpd_resp_send_chunk(req, line_buf, len);
 }
 
 /**
@@ -175,9 +176,9 @@ static void accumulate_sample(sample_accumulator_t *acc, const history_sample_t 
 /**
  * @brief Output accumulated bucket as CSV line
  */
-static void output_accumulated_bucket(httpd_req_t *req, sample_accumulator_t *acc, char *line_buf, size_t buf_size)
+static esp_err_t output_accumulated_bucket(httpd_req_t *req, sample_accumulator_t *acc, char *line_buf, size_t buf_size)
 {
-    if (acc->count == 0) return;
+    if (acc->count == 0) return ESP_OK;
 
     history_sample_t avg = {
         .timestamp = acc->bucket_start_ts,
@@ -192,7 +193,7 @@ static void output_accumulated_bucket(httpd_req_t *req, sample_accumulator_t *ac
         .fan_rpm = (uint16_t)(acc->sum_rpm / acc->count),
         .fan_speed = (uint8_t)(acc->sum_speed / acc->count),
     };
-    output_csv_sample(req, &avg, line_buf, buf_size);
+    return output_csv_sample(req, &avg, line_buf, buf_size);
 }
 
 /**
@@ -207,18 +208,18 @@ static void output_accumulated_bucket(httpd_req_t *req, sample_accumulator_t *ac
  * @param min_bucket Minimum bucket timestamp (inclusive)
  * @param max_bucket Maximum bucket timestamp (exclusive)
  */
-static void output_tier_in_range(
+static esp_err_t output_tier_in_range(
     httpd_req_t *req,
     history_tier_t source_tier,
     uint32_t target_resolution_s,
     uint32_t min_bucket,
     uint32_t max_bucket)
 {
-    if (min_bucket >= max_bucket) return;
+    if (min_bucket >= max_bucket) return ESP_OK;
 
     const uint32_t batch_size = 50;
     history_sample_t *samples = malloc(batch_size * sizeof(history_sample_t));
-    if (samples == NULL) return;
+    if (samples == NULL) return ESP_ERR_NO_MEM;
 
     char line[128];
     sample_accumulator_t acc;
@@ -227,6 +228,7 @@ static void output_tier_in_range(
     uint32_t total = history_get_count(source_tier);
     uint32_t offset = 0;
     bool first_sample = true;
+    esp_err_t ret = ESP_OK;
 
     while (offset < total) {
         uint32_t count = 0;
@@ -248,7 +250,8 @@ static void output_tier_in_range(
                 reset_accumulator(&acc, bucket_ts);
                 first_sample = false;
             } else if (bucket_ts != acc.bucket_start_ts) {
-                output_accumulated_bucket(req, &acc, line, sizeof(line));
+                ret = output_accumulated_bucket(req, &acc, line, sizeof(line));
+                if (ret != ESP_OK) goto done;
                 reset_accumulator(&acc, bucket_ts);
             }
 
@@ -259,10 +262,12 @@ static void output_tier_in_range(
 
     // Output final bucket
     if (acc.count > 0) {
-        output_accumulated_bucket(req, &acc, line, sizeof(line));
+        ret = output_accumulated_bucket(req, &acc, line, sizeof(line));
     }
 
+done:
     free(samples);
+    return ret;
 }
 
 /**
@@ -514,8 +519,12 @@ static esp_err_t history_send_csv(httpd_req_t *req, history_tier_t view)
         uint32_t min_bucket = (range_start / target_resolution) * target_resolution;
         uint32_t max_bucket = ((upper_bound + target_resolution - 1) / target_resolution) * target_resolution;
 
-        output_tier_in_range(req, (history_tier_t)tier, target_resolution,
+        esp_err_t err = output_tier_in_range(req, (history_tier_t)tier, target_resolution,
                             min_bucket, max_bucket);
+        if (err != ESP_OK) {
+            // Client likely disconnected - stop sending
+            return err;
+        }
     }
 
     httpd_resp_send_chunk(req, NULL, 0);  // End chunked response
@@ -756,6 +765,23 @@ static esp_err_t info_handler(httpd_req_t *req)
         cJSON_AddNumberToObject(root, "unix_timestamp", (double)time_sync_get_timestamp());
     }
 
+    // Reset reason
+    esp_reset_reason_t reason = esp_reset_reason();
+    const char *reason_str;
+    switch (reason) {
+        case ESP_RST_POWERON:   reason_str = "power_on"; break;
+        case ESP_RST_SW:        reason_str = "software"; break;
+        case ESP_RST_PANIC:     reason_str = "panic"; break;
+        case ESP_RST_INT_WDT:   reason_str = "interrupt_watchdog"; break;
+        case ESP_RST_TASK_WDT:  reason_str = "task_watchdog"; break;
+        case ESP_RST_WDT:       reason_str = "other_watchdog"; break;
+        case ESP_RST_DEEPSLEEP: reason_str = "deep_sleep"; break;
+        case ESP_RST_BROWNOUT:  reason_str = "brownout"; break;
+        case ESP_RST_SDIO:      reason_str = "sdio"; break;
+        default:                reason_str = "unknown"; break;
+    }
+    cJSON_AddStringToObject(root, "reset_reason", reason_str);
+
     // Free heap
     cJSON_AddNumberToObject(root, "free_heap", esp_get_free_heap_size());
     cJSON_AddNumberToObject(root, "min_free_heap", esp_get_minimum_free_heap_size());
@@ -853,6 +879,111 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
     return send_ret;
 }
 
+// =============================================================================
+// Binary History Endpoint
+// =============================================================================
+
+/**
+ * Binary wire format header (28 bytes, packed):
+ *   [4] magic: 0x48425F31 ("HB_1")
+ *   [4] flags: bit 0 = incremental response
+ *   [4] server_timestamp (uint32_t)
+ *   [2] sample_size (sizeof(history_sample_t))
+ *   [2] tier_count (6)
+ *  [12] tier_sample_counts: uint16_t[6]
+ */
+typedef struct __attribute__((packed)) {
+    uint32_t magic;
+    uint32_t flags;
+    uint32_t server_timestamp;
+    uint16_t sample_size;
+    uint16_t tier_count;
+    uint16_t tier_sample_counts[TIER_COUNT];
+} history_binary_header_t;
+
+/**
+ * @brief GET /api/history/all - All tier data as binary
+ *
+ * Returns raw struct bytes for all tiers in a single response.
+ * Supports ?since=<timestamp> for incremental updates.
+ */
+static esp_err_t history_binary_handler(httpd_req_t *req)
+{
+    add_cors_headers(req);
+    httpd_resp_set_type(req, "application/octet-stream");
+
+    // Parse since query param
+    char query[64] = {0};
+    httpd_req_get_url_query_str(req, query, sizeof(query));
+    uint32_t since_ts = 0;
+    char param[16];
+    if (httpd_query_key_value(query, "since", param, sizeof(param)) == ESP_OK) {
+        since_ts = (uint32_t)strtoul(param, NULL, 10);
+    }
+
+    // Determine samples per tier
+    uint16_t tier_counts[TIER_COUNT];
+    uint32_t tier_start[TIER_COUNT];
+
+    for (int t = 0; t < TIER_COUNT; t++) {
+        uint32_t total = history_get_count((history_tier_t)t);
+        uint32_t start = history_get_samples_since((history_tier_t)t, since_ts);
+        if (start > total) start = total;
+        uint32_t output = total - start;
+        tier_counts[t] = (output > UINT16_MAX) ? UINT16_MAX : (uint16_t)output;
+        tier_start[t] = start;
+    }
+
+    // Build and send header
+    history_binary_header_t header = {
+        .magic = 0x48425F31,
+        .flags = (since_ts > 0) ? 1 : 0,
+        .server_timestamp = history_get_timestamp(),
+        .sample_size = (uint16_t)sizeof(history_sample_t),
+        .tier_count = TIER_COUNT,
+    };
+    for (int t = 0; t < TIER_COUNT; t++) {
+        header.tier_sample_counts[t] = tier_counts[t];
+    }
+
+    esp_err_t ret = httpd_resp_send_chunk(req, (const char *)&header, sizeof(header));
+    if (ret != ESP_OK) return ret;
+
+    // Send tier data in batches
+    const uint32_t batch_size = 50;
+    history_sample_t *batch = malloc(batch_size * sizeof(history_sample_t));
+    if (batch == NULL) {
+        httpd_resp_send_chunk(req, NULL, 0);
+        return ESP_ERR_NO_MEM;
+    }
+
+    for (int t = 0; t < TIER_COUNT; t++) {
+        uint32_t remaining = tier_counts[t];
+        uint32_t offset = tier_start[t];
+
+        while (remaining > 0) {
+            uint32_t to_read = (remaining < batch_size) ? remaining : batch_size;
+            uint32_t count = 0;
+            esp_err_t err = history_get_samples((history_tier_t)t, batch, to_read, offset, &count);
+            if (err != ESP_OK || count == 0) break;
+
+            ret = httpd_resp_send_chunk(req, (const char *)batch,
+                                        count * sizeof(history_sample_t));
+            if (ret != ESP_OK) {
+                free(batch);
+                return ret;
+            }
+
+            offset += count;
+            remaining -= count;
+        }
+    }
+
+    free(batch);
+    httpd_resp_send_chunk(req, NULL, 0);
+    return ESP_OK;
+}
+
 /**
  * @brief POST /api/history/reset - Clear all history data and flash
  */
@@ -914,8 +1045,12 @@ esp_err_t api_server_start(void)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 16;
+    config.max_uri_handlers = 17;
+    config.max_open_sockets = 8;    // default is 4, dashboard fires 8 concurrent requests
     config.stack_size = 8192;
+    config.recv_wait_timeout = 10;  // seconds - explicit to survive ESP-IDF default changes
+    config.send_wait_timeout = 10;  // seconds - explicit to survive ESP-IDF default changes
+    config.lru_purge_enable = true;
 
     ESP_LOGI(TAG, "Starting HTTP server on port %d", config.server_port);
 
@@ -936,6 +1071,7 @@ esp_err_t api_server_start(void)
         {.uri = "/api/fan", .method = HTTP_POST, .handler = fan_post_handler},
         {.uri = "/api/history/save", .method = HTTP_POST, .handler = history_save_handler},
         {.uri = "/api/history/reset", .method = HTTP_POST, .handler = history_reset_handler},
+        {.uri = "/api/history/all", .method = HTTP_GET, .handler = history_binary_handler},
         {.uri = "/api/history/*", .method = HTTP_GET, .handler = history_handler},
         {.uri = "/api/health", .method = HTTP_GET, .handler = health_handler},
         {.uri = "/api/info", .method = HTTP_GET, .handler = info_handler},
@@ -955,6 +1091,7 @@ esp_err_t api_server_start(void)
     ESP_LOGI(TAG, "  GET  /api/status");
     ESP_LOGI(TAG, "  GET  /api/fan");
     ESP_LOGI(TAG, "  POST /api/fan");
+    ESP_LOGI(TAG, "  GET  /api/history/all (binary)");
     ESP_LOGI(TAG, "  GET  /api/history/{tier}?format=csv");
     ESP_LOGI(TAG, "  POST /api/history/save");
     ESP_LOGI(TAG, "  POST /api/history/reset");

@@ -308,7 +308,7 @@ void app_main(void)
             // Update fan speed if in AUTO mode
             fan_auto_update(air.pm2_5);
 
-            ESP_LOGI(TAG, "Fan %d%% %lu RPM | PM2.5 %.1f | %.1fC %.0f%% | VOC %d NOx %d",
+            ESP_LOGD(TAG, "Fan %d%% %lu RPM | PM2.5 %.1f | %.1fC %.0f%% | VOC %d NOx %d",
                      speed, rpm, air.pm2_5, air.temperature, air.humidity,
                      air.voc_index, air.nox_index);
         } else if (sen_ret == ESP_ERR_NOT_FOUND) {
@@ -331,10 +331,13 @@ void app_main(void)
             ESP_LOGI(TAG, "Auto-saving history to flash...");
             if (history_save() == ESP_OK) {
                 ESP_LOGI(TAG, "History auto-save complete");
+                last_history_save_us = now_us;
             } else {
-                ESP_LOGW(TAG, "History auto-save failed");
+                ESP_LOGW(TAG, "History auto-save failed, retrying in 5 minutes");
+                // Retry in 5 minutes instead of waiting another 6 hours
+                last_history_save_us = now_us - (int64_t)HISTORY_SAVE_INTERVAL_S * 1000000
+                                              + (int64_t)300 * 1000000;
             }
-            last_history_save_us = now_us;
         }
 
         vTaskDelay(pdMS_TO_TICKS(MONITOR_INTERVAL_MS));

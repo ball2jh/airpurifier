@@ -515,10 +515,11 @@ esp_err_t sen55_read(sen55_data_t *data)
     data->nox_index = (nox_raw == 0x7FFF) ? -1 : nox_raw / 10;
 
     // Cache for non-consuming access (e.g., API handler)
-    if (reading_mutex) xSemaphoreTake(reading_mutex, portMAX_DELAY);
-    last_reading = *data;
-    has_valid_reading = true;
-    if (reading_mutex) xSemaphoreGive(reading_mutex);
+    if (reading_mutex && xSemaphoreTake(reading_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        last_reading = *data;
+        has_valid_reading = true;
+        xSemaphoreGive(reading_mutex);
+    }
 
     return ESP_OK;
 
@@ -599,8 +600,10 @@ bool sen55_get_last_reading(sen55_data_t *data)
     if (data == NULL || !has_valid_reading) {
         return false;
     }
-    if (reading_mutex) xSemaphoreTake(reading_mutex, portMAX_DELAY);
-    *data = last_reading;
-    if (reading_mutex) xSemaphoreGive(reading_mutex);
-    return true;
+    if (reading_mutex && xSemaphoreTake(reading_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        *data = last_reading;
+        xSemaphoreGive(reading_mutex);
+        return true;
+    }
+    return false;
 }

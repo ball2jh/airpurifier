@@ -130,13 +130,6 @@ static void ota_task(void *pvParameter)
     }
     ESP_LOGI(TAG, "Firmware size: %d bytes", content_length);
 
-    // Save history before OTA (preserves data across updates)
-    ESP_LOGI(TAG, "Saving history to flash before update...");
-    esp_err_t save_err = history_save();
-    if (save_err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to save history: %s (continuing anyway)", esp_err_to_name(save_err));
-    }
-
     // Begin OTA
     err = esp_ota_begin(update_partition, OTA_WITH_SEQUENTIAL_WRITES, &ota_handle);
     if (err != ESP_OK) {
@@ -216,6 +209,10 @@ static void ota_task(void *pvParameter)
         esp_http_client_cleanup(client);
     }
     free(buffer);
+
+    // Save history again to preserve samples collected during download
+    ESP_LOGI(TAG, "Saving history before reboot...");
+    history_save();
 
     // Delay then reboot
     vTaskDelay(pdMS_TO_TICKS(2000));

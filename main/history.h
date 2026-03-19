@@ -146,6 +146,18 @@ uint32_t history_get_count(history_tier_t tier);
 void history_get_stats(history_stats_t *stats);
 
 /**
+ * @brief Get start index of samples newer than a timestamp
+ *
+ * Useful for incremental updates. Backward scan from newest sample
+ * makes this efficient when only a few new samples exist (typical case).
+ *
+ * @param tier Which tier to query
+ * @param since_ts Timestamp threshold (returns samples with ts > since_ts)
+ * @return Start index of first sample newer than since_ts (0 = all samples)
+ */
+uint32_t history_get_samples_since(history_tier_t tier, uint32_t since_ts);
+
+/**
  * @brief Clear all history data
  */
 void history_clear(void);
