@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   LineChart,
   Line,
@@ -172,6 +172,20 @@ export default function HistoryChart({ tier, setTier, visibleMetrics, setVisible
   const [autoScale, setAutoScale] = useState(false);
   const windowWidth = useWindowWidth();
   const { unit: tempUnitValue } = useTemperatureUnit();
+
+  // Only animate on initial mount - Recharts internally generates a new animationId
+  // every time the points array reference changes (via useAnimationId), which replays
+  // the full entrance animation. We disable animation after the first render with data
+  // so tier changes and refetches get instant updates instead of replaying the slide.
+  const hasInitiallyAnimated = useRef(false);
+  useEffect(() => {
+    if (data?.samples?.length > 0 && !hasInitiallyAnimated.current) {
+      const timer = setTimeout(() => {
+        hasInitiallyAnimated.current = true;
+      }, 350);
+      return () => clearTimeout(timer);
+    }
+  }, [data]);
 
   // Dynamic tick count based on screen width
   const tickCount = windowWidth < 400 ? 5 : windowWidth < 640 ? 7 : windowWidth < 1024 ? 10 : 14;
@@ -411,7 +425,8 @@ export default function HistoryChart({ tier, setTier, visibleMetrics, setVisible
                 dot={false}
                 strokeWidth={2}
                 yAxisId={normalized ? 'left' : m.yAxis}
-                isAnimationActive={true}
+                isAnimationActive={!hasInitiallyAnimated.current}
+                animateNewValues={false}
                 animationDuration={300}
                 animationEasing="ease-out"
               />

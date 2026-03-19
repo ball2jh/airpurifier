@@ -369,9 +369,11 @@ function Dashboard() {
         <div className="flex items-center gap-2">
           <h1 className="text-base md:text-xl font-semibold text-text truncate">Air Purifier</h1>
           <span className={`w-2 h-2 rounded-full shrink-0 ${isConnected ? 'bg-green shadow-[0_0_6px_#a6e3a1]' : 'bg-red shadow-[0_0_6px_#f38ba8]'}`} />
-          <span className={`text-[10px] tabular-nums hidden sm:inline ${secondsAgo > 10 ? 'text-yellow' : 'text-overlay'}`}>
-            {secondsAgo > 0 ? `${secondsAgo}s ago` : 'live'}
-          </span>
+          {secondsAgo > 5 && (
+            <span className={`text-[10px] tabular-nums hidden sm:inline ${secondsAgo > 10 ? 'text-yellow' : 'text-overlay'}`}>
+              {secondsAgo}s ago
+            </span>
+          )}
         </div>
 
         <nav className="flex gap-1 sm:gap-2">
