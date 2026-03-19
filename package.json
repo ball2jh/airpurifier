@@ -1,0 +1,12 @@
+{
+  "name": "esp32-collector",
+  "version": "1.0.0",
+  "description": "Host-side history collector for ESP32 environmental controller",
+  "main": "server.js",
+  "scripts": {
+    "start": "bun server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0"
+  }
+}
