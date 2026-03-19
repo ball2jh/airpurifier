@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Card } from '@/components/ui/card';
 import { HardDrive, Download, Save, Loader2, Check, X, Database } from 'lucide-react';
-import { saveHistoryToFlash, getHistoryRaw, getHistory } from '../api/esp32';
+import { saveHistoryToFlash, getHistoryRaw } from '../api/esp32';
 
 const TIERS = [
   { key: 'raw', label: '1h', resolution: '2s' },

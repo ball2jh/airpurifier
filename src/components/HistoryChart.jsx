@@ -31,10 +31,12 @@ export const TIERS = [
   { key: '30m', label: '30m', resolution: 2, resolutionLabel: '2s', apiKey: 'raw', maxAge: 1800 },
   { key: 'raw', label: '1h', resolution: 2, resolutionLabel: '2s' },
   { key: 'fine', label: '6h', resolution: 60, resolutionLabel: '1m' },
-  { key: 'medium', label: '24h', resolution: 600, resolutionLabel: '10m' },
-  { key: 'coarse', label: '7d', resolution: 3600, resolutionLabel: '1h' },
-  { key: 'daily', label: '30d', resolution: 21600, resolutionLabel: '6h' },
-  { key: 'archive', label: '3y', resolution: 86400, resolutionLabel: '24h' },
+  { key: 'medium', label: '24h', resolution: 60, resolutionLabel: '1m', source: 'archive', maxAge: 86400 },
+  { key: 'coarse', label: '7d', resolution: 300, resolutionLabel: '5m', source: 'archive', maxAge: 604800 },
+  { key: 'daily', label: '30d', resolution: 900, resolutionLabel: '15m', source: 'archive', maxAge: 2592000 },
+  { key: 'archive', label: '90d', resolution: 3600, resolutionLabel: '1h', source: 'archive', maxAge: 7776000 },
+  { key: '1y', label: '1y', resolution: 10800, resolutionLabel: '3h', source: 'archive', maxAge: 31536000 },
+  { key: 'all', label: 'All', resolution: 21600, resolutionLabel: '6h', source: 'archive', maxAge: 0 },
 ];
 
 export const METRIC_GROUPS = [
@@ -123,8 +125,11 @@ function formatTimestamp(unixSeconds, tier, forTooltip = false) {
   if (tier === 'coarse') {
     return date.toLocaleDateString([], { weekday: 'short', hour: 'numeric' });
   }
-  // daily/archive - show month and day
-  return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  if (tier === 'daily' || tier === 'archive') {
+    return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  }
+  // 1y/all - show month and year
+  return date.toLocaleDateString([], { month: 'short', year: '2-digit' });
 }
 
 function CustomTooltip({ active, payload, label, normalized, metricRanges, tier, tempUnitLabel }) {

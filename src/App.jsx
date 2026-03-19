@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { Settings } from 'lucide-react';
-import { getStatus, getHealth, getHistory } from './api/esp32';
+import { getStatus, getHealth, getAllHistoryBinary, getArchiveQuery } from './api/esp32';
 import { useTemperatureUnit, TemperatureUnitProvider, convertTemp, tempUnit } from './utils/temperature';
 import AQICard, { calculateAQI } from './components/AQICard';
 import SecondaryMetric from './components/SecondaryMetric';
@@ -217,71 +217,102 @@ function Dashboard() {
     refetchInterval: 10000,
   });
 
-  const { data: fineHistory } = useQuery({
-    queryKey: ['history', 'fine'],
-    queryFn: () => getHistory('fine'),
-    refetchInterval: 60000,
-  });
+  // Single combined binary history query (replaces 6 separate CSV queries)
+  const allHistoryRef = useRef(null);
+  const lastServerTsRef = useRef(0);
 
-  // Raw tier for short-term comparison (1h view)
-  const { data: rawHistory } = useQuery({
-    queryKey: ['history', 'raw'],
-    queryFn: () => getHistory('raw'),
+  const TIER_CAPACITIES = useRef({ raw: 1800, fine: 360, medium: 144, coarse: 168, daily: 120, archive: 1095 }).current;
+
+  const { data: allHistory, isLoading: historyLoading, error: historyError } = useQuery({
+    queryKey: ['history', 'all'],
+    queryFn: async () => {
+      const sinceTs = lastServerTsRef.current;
+      const result = await getAllHistoryBinary(sinceTs);
+
+      // Detect history reset: all tiers empty in incremental response, or server timestamp went backward
+      const totalNewSamples = Object.values(result.tiers).reduce((sum, t) => sum + t.count, 0);
+      const wasReset = result.isIncremental && totalNewSamples === 0 && allHistoryRef.current;
+      if (wasReset) {
+        // Server was reset — clear refs and re-fetch full data next cycle
+        lastServerTsRef.current = 0;
+        allHistoryRef.current = null;
+        return result.tiers;  // Empty tiers this cycle, full fetch next
+      }
+
+      if (!result.isIncremental || !allHistoryRef.current) {
+        // Full response — use as-is
+        lastServerTsRef.current = result.serverTimestamp;
+        allHistoryRef.current = result.tiers;
+        return result.tiers;
+      }
+
+      // Incremental — merge new samples with existing data
+      const merged = {};
+      for (const tierName of Object.keys(result.tiers)) {
+        const existing = allHistoryRef.current[tierName]?.samples || [];
+        const newSamples = result.tiers[tierName].samples;
+        if (newSamples.length === 0) {
+          merged[tierName] = allHistoryRef.current[tierName] || { samples: [], count: 0 };
+          continue;
+        }
+        const combined = [...existing, ...newSamples];
+        const capacity = TIER_CAPACITIES[tierName] || combined.length;
+        const trimmed = combined.length > capacity
+          ? combined.slice(combined.length - capacity)
+          : combined;
+        merged[tierName] = { samples: trimmed, count: trimmed.length };
+      }
+
+      lastServerTsRef.current = result.serverTimestamp;
+      allHistoryRef.current = merged;
+      return merged;
+    },
     refetchInterval: 5000,
+    refetchOnWindowFocus: false,
   });
 
-  // Resolve virtual tiers (15m, 30m) to their API tier
+  // Derive per-tier data from combined result
+  const rawHistory = allHistory?.raw;
+  const fineHistory = allHistory?.fine;
+  const mediumHistory = allHistory?.medium;
+  const coarseHistory = allHistory?.coarse;
+  const dailyHistory = allHistory?.daily;
+  const archiveData = allHistory?.archive;
+
+  // Resolve tier config and determine data source
   const tierConfig = TIERS.find(t => t.key === historyTier);
-  const apiTier = tierConfig?.apiKey || historyTier;
+  const isArchiveTier = tierConfig?.source === 'archive';
 
-  // History data for selected tier (used by HistoryChart and summary cards)
-  const { data: historyDataRaw, isLoading: historyLoading, error: historyError } = useQuery({
-    queryKey: ['history', apiTier],
-    queryFn: () => getHistory(apiTier),
-    refetchInterval: apiTier === 'raw' ? 5000 : 30000,
-    retry: 2,
-    staleTime: 5000,
+  // Archive query for collector-backed tiers
+  const { data: archiveQueryData, isLoading: archiveLoading, error: archiveError } = useQuery({
+    queryKey: ['archive', historyTier],
+    queryFn: () => {
+      const now = Math.floor(Date.now() / 1000);
+      const from = tierConfig.maxAge > 0 ? now - tierConfig.maxAge : 0;
+      return getArchiveQuery(from, now, tierConfig.resolution);
+    },
+    enabled: isArchiveTier,
+    refetchInterval: 30000,
+    refetchOnWindowFocus: false,
   });
+
+  // ESP32 tier resolution for non-archive tiers
+  const apiTier = tierConfig?.apiKey || historyTier;
+  const esp32DataRaw = allHistory?.[apiTier] || null;
 
   // Filter data client-side for virtual tiers (15m, 30m)
-  const historyData = useMemo(() => {
-    if (!historyDataRaw || !tierConfig?.maxAge) return historyDataRaw;
-    const samples = historyDataRaw.samples;
-    if (samples.length === 0) return historyDataRaw;
+  const esp32Data = useMemo(() => {
+    if (!esp32DataRaw || !tierConfig?.maxAge) return esp32DataRaw;
+    const samples = esp32DataRaw.samples;
+    if (samples.length === 0) return esp32DataRaw;
     const maxTs = samples[samples.length - 1].timestamp;
     const cutoff = maxTs - tierConfig.maxAge;
     const filtered = samples.filter(s => s.timestamp >= cutoff);
     return { samples: filtered, count: filtered.length };
-  }, [historyDataRaw, historyTier]);
+  }, [esp32DataRaw, historyTier]);
 
-  // Medium tier for 24h view
-  const { data: mediumHistory } = useQuery({
-    queryKey: ['history', 'medium'],
-    queryFn: () => getHistory('medium'),
-    refetchInterval: 60000,
-  });
-
-  // Coarse tier for 7d view
-  const { data: coarseHistory } = useQuery({
-    queryKey: ['history', 'coarse'],
-    queryFn: () => getHistory('coarse'),
-    refetchInterval: 5 * 60 * 1000,
-  });
-
-  // Daily tier for 30d view
-  const { data: dailyHistory } = useQuery({
-    queryKey: ['history', 'daily'],
-    queryFn: () => getHistory('daily'),
-    refetchInterval: 5 * 60 * 1000,
-  });
-
-  // Archive data for 3y view
-  const { data: archiveData } = useQuery({
-    queryKey: ['history', 'archive'],
-    queryFn: () => getHistory('archive'),
-    staleTime: 5 * 60 * 1000,
-    refetchInterval: 5 * 60 * 1000,
-  });
+  // Pick the right data source
+  const historyData = isArchiveTier ? archiveQueryData : esp32Data;
 
   // Connected = no current error, Disconnected = error (but we may still have cached data)
   const isConnected = !error;
@@ -461,8 +492,8 @@ function Dashboard() {
             visibleMetrics={visibleMetrics}
             setVisibleMetrics={setVisibleMetrics}
             data={historyData}
-            isLoading={historyLoading}
-            error={historyError}
+            isLoading={isArchiveTier ? archiveLoading : historyLoading}
+            error={isArchiveTier ? archiveError : historyError}
           />
 
           {/* Summary Cards */}

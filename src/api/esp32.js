@@ -1,3 +1,5 @@
+import { decodeBinaryHistory } from './binaryDecoder';
+
 const API_BASE = '';
 
 export const getStatus = () =>
@@ -66,9 +68,43 @@ export const saveHistoryToFlash = () =>
     return r.json();
   });
 
+// Fetch all tiers as binary, with optional incremental update
+export const getAllHistoryBinary = (sinceTimestamp) => {
+  const url = sinceTimestamp
+    ? `${API_BASE}/api/history/all?since=${sinceTimestamp}`
+    : `${API_BASE}/api/history/all`;
+  return fetch(url).then(r => {
+    if (!r.ok) throw new Error(`Binary history fetch failed: ${r.status}`);
+    return r.arrayBuffer();
+  }).then(decodeBinaryHistory);
+};
+
 // Get raw CSV data for a tier (for download)
 export const getHistoryRaw = (tier) =>
   fetch(`${API_BASE}/api/history/${tier}?format=csv`).then(r => {
     if (!r.ok) throw new Error(`History fetch failed: ${r.status}`);
     return r.text();
+  });
+
+// Query the host-side archive collector for historical data
+export const getArchiveQuery = (from, to, resolution) =>
+  fetch(`${API_BASE}/archive/query?from=${from}&to=${to}&resolution=${resolution}`).then(r => {
+    if (!r.ok) throw new Error(`Archive query failed: ${r.status}`);
+    return r.json();
+  }).then(data => {
+    // Transform aggregated buckets into the sample shape the chart expects
+    const samples = data.samples.map(s => ({
+      timestamp: s.bucket,
+      pm1_0: s.pm1_0_avg,
+      pm2_5: s.pm2_5_avg,
+      pm4_0: s.pm4_0_avg,
+      pm10: s.pm10_avg,
+      humidity: s.humidity_avg,
+      temperature: s.temperature_avg,
+      voc_index: s.voc_index_avg,
+      nox_index: s.nox_index_avg,
+      fan_rpm: s.fan_rpm_avg,
+      fan_speed: s.fan_speed_avg,
+    }));
+    return { samples, count: samples.length };
   });

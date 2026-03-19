@@ -12,6 +12,7 @@ export default defineConfig({
     },
   },
   server: {
+    port: 5199,
     proxy: {
       '/api': {
         target: `http://${process.env.ESP32_IP || 'airpurifier.local'}`,
