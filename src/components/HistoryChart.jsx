@@ -291,55 +291,63 @@ export default function HistoryChart({ tier, setTier, visibleMetrics, setVisible
           </button>
 
           {/* Tier Selector */}
-          <div className="flex gap-0.5 bg-mantle rounded-lg p-1 overflow-x-auto no-scrollbar">
-            {TIERS.map(t => (
-              <button
-                key={t.key}
-                className={`px-2.5 sm:px-3 py-2.5 sm:py-1.5 text-sm sm:text-xs min-w-[40px] font-medium rounded-md transition-colors whitespace-nowrap ${
-                  tier === t.key
-                    ? 'bg-blue text-base'
-                    : 'text-subtext hover:text-text hover:bg-surface'
-                }`}
-                onClick={() => setTier(t.key)}
-                title={t.duration}
-              >
-                {t.label}
-              </button>
-            ))}
+          <div className="relative">
+            <div className="pointer-events-none absolute inset-y-0 left-0 w-4 bg-gradient-to-r from-mantle to-transparent rounded-l-lg z-10 sm:hidden" />
+            <div className="pointer-events-none absolute inset-y-0 right-0 w-4 bg-gradient-to-l from-mantle to-transparent rounded-r-lg z-10 sm:hidden" />
+            <div className="flex gap-0.5 bg-mantle rounded-lg p-1 overflow-x-auto no-scrollbar">
+              {TIERS.map(t => (
+                <button
+                  key={t.key}
+                  className={`px-2.5 sm:px-3 py-2.5 sm:py-1.5 text-sm sm:text-xs min-w-[40px] font-medium rounded-md transition-colors whitespace-nowrap ${
+                    tier === t.key
+                      ? 'bg-blue text-base'
+                      : 'text-subtext hover:text-text hover:bg-surface'
+                  }`}
+                  onClick={() => setTier(t.key)}
+                  title={t.duration}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </div>
 
       {/* Metric Toggles */}
-      <div className="flex overflow-x-auto no-scrollbar items-center gap-1.5 sm:gap-2 mb-4 sm:mb-6 sm:flex-wrap pb-1 sm:pb-0">
-        {METRIC_GROUPS.map((group, groupIndex) => (
-          <div key={group.name} className="contents">
-            {groupIndex > 0 && (
-              <div className="w-px h-7 bg-surface-1 mx-1 hidden sm:block" />
-            )}
-            <div className="flex items-center gap-1.5 sm:gap-2 sm:bg-mantle rounded-full sm:p-1">
-              {group.metrics.map(m => {
-                const isActive = visibleMetrics.includes(m.key);
-                return (
-                  <button
-                    key={m.key}
-                    onClick={() => toggleMetric(m.key)}
-                    className={`px-3 py-2 sm:py-1.5 text-sm font-medium rounded-full whitespace-nowrap transition-all ${
-                      isActive
-                        ? 'text-base shadow-sm'
-                        : 'text-overlay hover:text-subtext bg-mantle sm:bg-transparent'
-                    }`}
-                    style={{
-                      backgroundColor: isActive ? m.color : undefined,
-                    }}
-                  >
-                    {m.label}
-                  </button>
-                );
-              })}
+      <div className="relative mb-4 sm:mb-6">
+        <div className="pointer-events-none absolute inset-y-0 left-0 w-6 bg-gradient-to-r from-mantle to-transparent z-10 sm:hidden" />
+        <div className="pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-mantle to-transparent z-10 sm:hidden" />
+        <div className="flex overflow-x-auto no-scrollbar items-center gap-1.5 sm:gap-2 sm:flex-wrap pb-1 sm:pb-0">
+          {METRIC_GROUPS.map((group, groupIndex) => (
+            <div key={group.name} className="contents">
+              {groupIndex > 0 && (
+                <div className="w-px h-7 bg-surface-1 mx-1 hidden sm:block" />
+              )}
+              <div className="flex items-center gap-1.5 sm:gap-2 sm:bg-mantle rounded-full sm:p-1">
+                {group.metrics.map(m => {
+                  const isActive = visibleMetrics.includes(m.key);
+                  return (
+                    <button
+                      key={m.key}
+                      onClick={() => toggleMetric(m.key)}
+                      className={`px-3 py-2 sm:py-1.5 text-sm font-medium rounded-full whitespace-nowrap transition-all ${
+                        isActive
+                          ? 'text-base shadow-sm'
+                          : 'text-overlay hover:text-subtext bg-mantle sm:bg-transparent'
+                      }`}
+                      style={{
+                        backgroundColor: isActive ? m.color : undefined,
+                      }}
+                    >
+                      {m.label}
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
 
       {/* Loading/Error States */}
