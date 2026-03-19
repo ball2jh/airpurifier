@@ -48,6 +48,10 @@ function decodeBinaryHistory(buffer) {
     const count = tierCounts[t];
     const samples = new Array(count);
 
+    if (offset + count * sampleSize > buffer.byteLength) {
+      throw new Error(`Truncated response: tier ${TIER_NAMES[t]} needs ${offset + count * sampleSize} bytes but buffer is ${buffer.byteLength}`);
+    }
+
     for (let i = 0; i < count; i++) {
       const base = offset + i * sampleSize;
       samples[i] = {
