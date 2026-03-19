@@ -1,6 +1,6 @@
 # airpurifier-ui
 
-Web dashboard for the [esp32-env-controller](https://github.com/ball2jh/esp32-env-controller). Displays real-time and historical environmental data from the SEN55 sensor — temperature, humidity, AQI, PM2.5 — with fan control.
+Web dashboard for the [airpurifier](https://github.com/ball2jh/airpurifier) ESP32 controller. Displays real-time and historical environmental data from the SEN55 sensor — temperature, humidity, AQI, PM2.5 — with fan control.
 
 ## Features
 
@@ -41,7 +41,7 @@ React, Vite, Tailwind CSS, Recharts, TanStack Query
 
 | Repository | Description |
 |------------|-------------|
-| [esp32-env-controller](https://github.com/ball2jh/esp32-env-controller) | ESP32 firmware — SEN55 sensor, fan control, REST API |
+| [airpurifier](https://github.com/ball2jh/airpurifier) | ESP32 firmware — SEN55 sensor, fan control, REST API |
 | [airpurifier-collector](https://github.com/ball2jh/airpurifier-collector) | Host-side history collector — long-term SQLite storage and archive API |
 
 ## License
