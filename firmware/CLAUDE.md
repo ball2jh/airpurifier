@@ -16,7 +16,7 @@ ESP32 environmental controller using ESP-IDF v5.5. Controls PWM fans and monitor
 
 ```bash
 # ESP-IDF is vendored in-tree. Source before each session:
-. /home/jacka/Projects/Mac_Stuff/esp32/firmware/esp-idf/export.sh
+. /home/jacka/Projects/airpurifier/firmware/esp-idf/export.sh
 
 # Build
 idf.py build

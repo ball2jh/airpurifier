@@ -5,12 +5,12 @@ After=network.target
 [Service]
 Type=simple
 User=jacka
-WorkingDirectory=/home/jacka/Projects/Mac_Stuff/esp32/collector
+WorkingDirectory=/home/jacka/Projects/airpurifier/collector
 ExecStart=/usr/bin/bun server.js
 Restart=always
 RestartSec=5
 Environment=ESP32_HOST=airpurifier.local
-Environment=DB_PATH=/home/jacka/Projects/Mac_Stuff/esp32/collector/history.db
+Environment=DB_PATH=/home/jacka/Projects/airpurifier/collector/history.db
 Environment=PORT=9401
 
 [Install]
