@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge';
 
 function InfoItem({ icon: Icon, label, value }) {
   return (
-    <div className="flex items-center gap-3 py-3 border-b border-surface-1 last:border-0">
+    <div className="flex items-center gap-3 py-3 border-b border-surface-1 last:border-b-0 [&:nth-last-child(2)]:lg:border-b-0">
       <Icon className="w-4 h-4 text-overlay" />
       <span className="text-sm text-subtext flex-1">{label}</span>
       <span className="text-sm font-medium text-text">{value}</span>
