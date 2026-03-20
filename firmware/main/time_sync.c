@@ -13,6 +13,9 @@
 
 static const char *TAG = "time_sync";
 
+// POSIX TZ string for US Eastern (EST/EDT with DST transitions)
+#define TZ_STRING "EST5EDT,M3.2.0,M11.1.0"
+
 // Time is considered valid if year >= 2024
 #define TIME_VALID_YEAR 2024
 
@@ -39,7 +42,7 @@ esp_err_t time_sync_init(void)
     ESP_LOGI(TAG, "Initializing SNTP time sync");
 
     // Set timezone to US Eastern (EST5EDT)
-    setenv("TZ", "EST5EDT,M3.2.0,M11.1.0", 1);
+    setenv("TZ", TZ_STRING, 1);
     tzset();
 
     // Configure SNTP with callback

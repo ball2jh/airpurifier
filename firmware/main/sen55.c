@@ -87,7 +87,7 @@ static bool initialized = false;
 // I2C bus mutex — serializes all I2C transactions across tasks
 // Recursive because sen55_read() calls sen55_data_ready() internally
 static SemaphoreHandle_t i2c_mutex = NULL;
-#define I2C_MUTEX_TIMEOUT pdMS_TO_TICKS(5000)
+#define I2C_MUTEX_TIMEOUT pdMS_TO_TICKS(5000)  // I2C retries + bus recovery can take seconds
 
 // Health tracking
 static sen55_health_t health = {0};
@@ -485,13 +485,12 @@ static void read_sensor_identity(void)
     ret = sen55_read_data_internal(fw_data, 1);
     if (ret != ESP_OK) goto fail;
 
-    identity.firmware_major = fw_data[0];
-    identity.firmware_minor = fw_data[1];
+    identity.firmware_version = fw_data[0];
     identity.valid = true;
 
-    ESP_LOGI(TAG, "Sensor: %s (S/N: %s, FW: %u.%u)",
+    ESP_LOGI(TAG, "Sensor: %s (S/N: %s, FW: v%u)",
              identity.product_name, identity.serial_number,
-             identity.firmware_major, identity.firmware_minor);
+             identity.firmware_version);
     return;
 
 fail:
@@ -550,7 +549,8 @@ static void configure_voc_tuning(void)
  * @brief Set NOx algorithm tuning parameters for indoor air quality
  *
  * Per Engineering Guidelines: configure both VOC and NOx tuning.
- * Default NOx uses 12h learning; we set 72h for indoor AQ monitoring.
+ * Learning Time Offset set to 72h for indoor AQ (same rationale as VOC).
+ * Learning Time Gain (12h) and Std Initial (50) are mandatory constants per datasheet.
  * Must be called in idle mode (before start measurement).
  */
 static void configure_nox_tuning(void)
@@ -1157,7 +1157,7 @@ esp_err_t sen55_save_voc_state(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    // Per datasheet: only save after >= 3 hours of continuous operation
+    // Only save after >= 3 hours of continuous operation to ensure algorithm has stabilized
     int64_t uptime_s = esp_timer_get_time() / 1000000;
     if (uptime_s < 10800) {
         ESP_LOGD(TAG, "VOC state not saved (uptime %llds < 3h)", uptime_s);

@@ -79,7 +79,7 @@ static bool initialized = false;
 
 // Thread safety: protects all ring buffer state, accumulators, and stats
 static SemaphoreHandle_t history_mutex = NULL;
-#define HISTORY_MUTEX_TIMEOUT pdMS_TO_TICKS(2000)
+#define HISTORY_MUTEX_TIMEOUT pdMS_TO_TICKS(2000)  // flash writes are slower but bounded
 #define HISTORY_SAVE_MUTEX_TIMEOUT pdMS_TO_TICKS(5000)
 
 // Wide accumulator for averaging raw samples into fine tier
@@ -99,6 +99,9 @@ static uint32_t accumulator_count = 0;  // Total samples (including invalid)
 // =============================================================================
 // Helper Functions
 // =============================================================================
+
+_Static_assert(sizeof(time_t) <= sizeof(uint32_t),
+               "time_t exceeds uint32_t; update timestamp handling");
 
 /**
  * @brief Get current timestamp for history records
@@ -154,10 +157,10 @@ static void average_samples(const history_sample_t *samples, uint32_t count,
         output->pm10 = sum_pm10 / valid_count;
         output->humidity = sum_hum / valid_count;
         output->temperature = sum_temp / valid_count;
-        output->voc_index = (int16_t)(sum_voc / valid_count);
-        output->nox_index = (int16_t)(sum_nox / valid_count);
-        output->fan_rpm = (uint16_t)(sum_rpm / valid_count);
-        output->fan_speed = (uint8_t)(sum_speed / valid_count);
+        output->voc_index = (int16_t)((sum_voc + (int32_t)(valid_count / 2)) / (int32_t)valid_count);
+        output->nox_index = (int16_t)((sum_nox + (int32_t)(valid_count / 2)) / (int32_t)valid_count);
+        output->fan_rpm = (uint16_t)((sum_rpm + valid_count / 2) / valid_count);
+        output->fan_speed = (uint8_t)((sum_speed + valid_count / 2) / valid_count);
     } else {
         // All samples were invalid
         output->pm1_0 = -1;
@@ -438,10 +441,10 @@ esp_err_t history_record(const history_sample_t *sample)
                 .pm10 = accumulator.pm10 / accumulator.valid_count,
                 .humidity = accumulator.humidity / accumulator.valid_count,
                 .temperature = accumulator.temperature / accumulator.valid_count,
-                .voc_index = (int16_t)(accumulator.voc_index / (int32_t)accumulator.valid_count),
-                .nox_index = (int16_t)(accumulator.nox_index / (int32_t)accumulator.valid_count),
-                .fan_rpm = (uint16_t)(accumulator.fan_rpm / accumulator.valid_count),
-                .fan_speed = (uint8_t)(accumulator.fan_speed / accumulator.valid_count),
+                .voc_index = (int16_t)((accumulator.voc_index + (int32_t)(accumulator.valid_count / 2)) / (int32_t)accumulator.valid_count),
+                .nox_index = (int16_t)((accumulator.nox_index + (int32_t)(accumulator.valid_count / 2)) / (int32_t)accumulator.valid_count),
+                .fan_rpm = (uint16_t)((accumulator.fan_rpm + accumulator.valid_count / 2) / accumulator.valid_count),
+                .fan_speed = (uint8_t)((accumulator.fan_speed + accumulator.valid_count / 2) / accumulator.valid_count),
             };
         } else {
             // All samples in this window were invalid

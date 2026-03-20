@@ -90,8 +90,7 @@ typedef struct {
 typedef struct {
     char product_name[32];  // e.g. "SEN55"
     char serial_number[32]; // Unique serial
-    uint8_t firmware_major; // Firmware version major
-    uint8_t firmware_minor; // Firmware version minor
+    uint8_t firmware_version; // Firmware version (byte 0 of 0xD100 response)
     bool valid;             // Whether identity was successfully read
 } sen55_identity_t;
 

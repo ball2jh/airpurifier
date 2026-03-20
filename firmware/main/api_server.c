@@ -371,7 +371,7 @@ static esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(fan, "stalled", fan_is_stalled());
 
     // Timestamp
-    cJSON_AddNumberToObject(root, "timestamp", esp_timer_get_time() / 1000000.0);
+    cJSON_AddNumberToObject(root, "timestamp", (double)history_get_timestamp());
 
     esp_err_t ret = send_json_response(req, root);
     cJSON_Delete(root);
@@ -851,7 +851,7 @@ static esp_err_t info_handler(httpd_req_t *req)
         cJSON_AddStringToObject(sensor, "product", sen_id.product_name);
         cJSON_AddStringToObject(sensor, "serial", sen_id.serial_number);
         char fw_str[8];
-        snprintf(fw_str, sizeof(fw_str), "%u.%u", sen_id.firmware_major, sen_id.firmware_minor);
+        snprintf(fw_str, sizeof(fw_str), "%u", sen_id.firmware_version);
         cJSON_AddStringToObject(sensor, "firmware", fw_str);
     }
 

@@ -12,7 +12,7 @@ async function fetchHistory(since) {
   const url = since
     ? `http://${ESP32_HOST}/api/history/all?since=${since}`
     : `http://${ESP32_HOST}/api/history/all`;
-  const response = await fetch(url);
+  const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
   }
@@ -68,7 +68,7 @@ async function pollOnce() {
 }
 
 async function pollStatusOnce() {
-  const response = await fetch(`http://${ESP32_HOST}/api/status`);
+  const response = await fetch(`http://${ESP32_HOST}/api/status`, { signal: AbortSignal.timeout(15000) });
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}: ${response.statusText}`);
   }

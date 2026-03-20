@@ -231,7 +231,9 @@ static void ota_task(void *pvParameter)
     // Save history again to preserve samples collected during download
     esp_task_wdt_reset();
     ESP_LOGI(TAG, "Saving history before reboot...");
-    history_save();
+    if (history_save() != ESP_OK) {
+        ESP_LOGW(TAG, "History save before OTA reboot failed — data since last auto-save may be lost");
+    }
 
     // Remove from WDT before reboot
     esp_task_wdt_delete(NULL);

@@ -300,7 +300,9 @@ function Dashboard() {
           merged[tierName] = allHistoryRef.current[tierName] || { samples: [], count: 0 };
           continue;
         }
-        const combined = [...existing, ...newSamples];
+        const lastExistingTs = existing.length > 0 ? existing[existing.length - 1].timestamp : 0;
+        const deduped = newSamples.filter(s => s.timestamp > lastExistingTs);
+        const combined = [...existing, ...deduped];
         const capacity = TIER_CAPACITIES[tierName] || combined.length;
         const trimmed = combined.length > capacity
           ? combined.slice(combined.length - capacity)

@@ -137,7 +137,7 @@ static uint32_t get_smart_retry_delay_ms(void)
         // Likely wrong password - back off aggressively
         // 1min, 2min, 4min, 8min, 16min, 32min, 64min, 128min, 256min, 360min (6hr cap)
         int auth_backoff_level = auth_fail_count - AUTH_FAIL_THRESHOLD;
-        if (auth_backoff_level > 20) auth_backoff_level = 20;  // Prevent shift overflow
+        if (auth_backoff_level > 16) auth_backoff_level = 16;  // 60000 << 16 fits uint32_t
         delay = (uint32_t)AUTH_INITIAL_MS << auth_backoff_level;
         if (delay > AUTH_MAX_MS) {
             delay = AUTH_MAX_MS;

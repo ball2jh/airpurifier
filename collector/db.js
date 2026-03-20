@@ -1,5 +1,4 @@
 const { Database } = require('bun:sqlite');
-const path = require('path');
 const fs = require('fs');
 
 const DB_PATH = process.env.DB_PATH || '/mnt/ssd-240gb/airpurifier/history.db';
@@ -40,6 +39,8 @@ function getDb() {
         typical_size REAL
       )
     `);
+    db.run('CREATE INDEX IF NOT EXISTS idx_samples_ts ON samples(timestamp)');
+    db.run('CREATE INDEX IF NOT EXISTS idx_pm_number_ts ON pm_number_samples(timestamp)');
   }
   return db;
 }
@@ -123,16 +124,6 @@ function getStats() {
   };
 }
 
-function getRawSamples(from, to) {
-  const db = getDb();
-  return db.query(`
-    SELECT timestamp, pm1_0, pm2_5, pm4_0, pm10, humidity, temperature, voc_index, nox_index, fan_rpm, fan_speed
-    FROM samples
-    WHERE timestamp BETWEEN ?1 AND ?2
-    ORDER BY timestamp
-  `).all(from, to);
-}
-
 function iterateRawSamples(from, to) {
   const db = getDb();
   return db.query(`
@@ -202,4 +193,4 @@ function close() {
   }
 }
 
-module.exports = { getDb, insertSamples, getWatermark, queryAggregated, getStats, getRawSamples, iterateRawSamples, insertPmNumberSample, queryPmNumberAggregated, getPmNumberStats, clearAll, close };
+module.exports = { insertSamples, getWatermark, queryAggregated, getStats, iterateRawSamples, insertPmNumberSample, queryPmNumberAggregated, getPmNumberStats, clearAll, close };
