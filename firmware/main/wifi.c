@@ -18,6 +18,7 @@
 #include "esp_log.h"
 #include "esp_check.h"
 #include "esp_timer.h"
+#include "esp_task_wdt.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -385,14 +386,27 @@ bool wifi_is_connected(void)
 
 esp_err_t wifi_wait_connected(uint32_t timeout_ms)
 {
-    TickType_t ticks = (timeout_ms == 0) ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
+    // Wait in 5-second chunks to allow callers' watchdog timers to be fed
+    const uint32_t chunk_ms = 5000;
+    uint32_t remaining = timeout_ms;
 
-    EventBits_t bits = xEventGroupWaitBits(wifi_event_group,
-                                            WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
-                                            pdFALSE, pdFALSE, ticks);
+    while (remaining > 0) {
+        uint32_t wait = (remaining < chunk_ms) ? remaining : chunk_ms;
+        TickType_t ticks = pdMS_TO_TICKS(wait);
 
-    if (bits & WIFI_CONNECTED_BIT) {
-        return ESP_OK;
+        EventBits_t bits = xEventGroupWaitBits(wifi_event_group,
+                                                WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+                                                pdFALSE, pdFALSE, ticks);
+
+        if (bits & WIFI_CONNECTED_BIT) {
+            return ESP_OK;
+        }
+        if (bits & WIFI_FAIL_BIT) {
+            return ESP_ERR_TIMEOUT;
+        }
+
+        remaining -= wait;
+        esp_task_wdt_reset();
     }
 
     return ESP_ERR_TIMEOUT;

@@ -18,6 +18,8 @@
 #include "ota_update.h"
 #include "time_sync.h"
 #include "esp_system.h"
+#include "esp_core_dump.h"
+#include "esp_partition.h"
 #include <string.h>
 #include <stdlib.h>
 #include <inttypes.h>
@@ -1044,6 +1046,154 @@ static esp_err_t history_save_handler(httpd_req_t *req)
 }
 
 // =============================================================================
+// Core Dump
+// =============================================================================
+
+/**
+ * @brief GET /api/coredump - Get core dump summary if one exists
+ */
+static esp_err_t coredump_get_handler(httpd_req_t *req)
+{
+    cJSON *root = cJSON_CreateObject();
+
+#if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH && CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF
+    esp_err_t err = esp_core_dump_image_check();
+    if (err != ESP_OK) {
+        cJSON_AddBoolToObject(root, "present", false);
+        goto send;
+    }
+
+    cJSON_AddBoolToObject(root, "present", true);
+
+    // Get size
+    size_t addr, size;
+    if (esp_core_dump_image_get(&addr, &size) == ESP_OK) {
+        cJSON_AddNumberToObject(root, "size", size);
+    }
+
+    // Get panic reason
+    char panic_reason[200];
+    if (esp_core_dump_get_panic_reason(panic_reason, sizeof(panic_reason)) == ESP_OK) {
+        cJSON_AddStringToObject(root, "panic_reason", panic_reason);
+    }
+
+    // Get summary
+    esp_core_dump_summary_t *summary = malloc(sizeof(esp_core_dump_summary_t));
+    if (summary == NULL) {
+        cJSON_AddStringToObject(root, "error", "Out of memory for summary");
+        goto send;
+    }
+
+    if (esp_core_dump_get_summary(summary) == ESP_OK) {
+        cJSON_AddStringToObject(root, "task", summary->exc_task);
+        char pc_str[12];
+        snprintf(pc_str, sizeof(pc_str), "0x%08lx", (unsigned long)summary->exc_pc);
+        cJSON_AddStringToObject(root, "pc", pc_str);
+
+        // Exception info (Xtensa)
+        char cause_str[12];
+        snprintf(cause_str, sizeof(cause_str), "0x%08lx", (unsigned long)summary->ex_info.exc_cause);
+        cJSON_AddStringToObject(root, "exc_cause", cause_str);
+
+        // Backtrace
+        cJSON *bt = cJSON_CreateArray();
+        for (uint32_t i = 0; i < summary->exc_bt_info.depth && i < 16; i++) {
+            char addr_str[12];
+            snprintf(addr_str, sizeof(addr_str), "0x%08lx", (unsigned long)summary->exc_bt_info.bt[i]);
+            cJSON_AddItemToArray(bt, cJSON_CreateString(addr_str));
+        }
+        cJSON_AddItemToObject(root, "backtrace", bt);
+        cJSON_AddBoolToObject(root, "backtrace_corrupted", summary->exc_bt_info.corrupted);
+
+        // ELF SHA256 for matching with the build
+        cJSON_AddStringToObject(root, "app_elf_sha256", (const char *)summary->app_elf_sha256);
+    }
+    free(summary);
+#else
+    cJSON_AddBoolToObject(root, "present", false);
+    cJSON_AddStringToObject(root, "error", "Core dump not enabled");
+#endif
+
+send:;
+    esp_err_t ret = send_json_response(req, root);
+    cJSON_Delete(root);
+    return ret;
+}
+
+/**
+ * @brief GET /api/coredump/raw - Download raw core dump binary from flash
+ *
+ * Returns the raw ELF core dump for offline analysis with:
+ *   idf.py coredump-info --core /path/to/downloaded.bin
+ */
+static esp_err_t coredump_raw_handler(httpd_req_t *req)
+{
+    add_cors_headers(req);
+
+    size_t addr, img_size;
+    esp_err_t err = esp_core_dump_image_get(&addr, &img_size);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "No core dump present");
+        return ESP_FAIL;
+    }
+
+    const esp_partition_t *part = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_COREDUMP, NULL);
+    if (part == NULL) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Coredump partition not found");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/octet-stream");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"coredump.bin\"");
+
+    const size_t chunk_size = 1024;
+    char *buf = malloc(chunk_size);
+    if (buf == NULL) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
+        return ESP_FAIL;
+    }
+
+    size_t offset = 0;
+    while (offset < img_size) {
+        size_t to_read = (img_size - offset < chunk_size) ? (img_size - offset) : chunk_size;
+        err = esp_partition_read(part, offset, buf, to_read);
+        if (err != ESP_OK) {
+            free(buf);
+            return ESP_FAIL;
+        }
+        esp_err_t ret = httpd_resp_send_chunk(req, buf, to_read);
+        if (ret != ESP_OK) {
+            free(buf);
+            return ret;
+        }
+        offset += to_read;
+    }
+
+    free(buf);
+    httpd_resp_send_chunk(req, NULL, 0);
+    return ESP_OK;
+}
+
+/**
+ * @brief POST /api/coredump/clear - Erase core dump from flash
+ */
+static esp_err_t coredump_clear_handler(httpd_req_t *req)
+{
+    esp_err_t err = esp_core_dump_image_erase();
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "success", err == ESP_OK);
+    if (err != ESP_OK) {
+        cJSON_AddStringToObject(root, "error", esp_err_to_name(err));
+    }
+
+    esp_err_t ret = send_json_response(req, root);
+    cJSON_Delete(root);
+    return ret;
+}
+
+// =============================================================================
 // Server Setup
 // =============================================================================
 
@@ -1056,7 +1206,7 @@ esp_err_t api_server_start(void)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.uri_match_fn = httpd_uri_match_wildcard;
-    config.max_uri_handlers = 17;
+    config.max_uri_handlers = 20;
     config.max_open_sockets = 8;    // default is 4, dashboard fires 8 concurrent requests
     config.stack_size = 8192;
     config.recv_wait_timeout = 10;  // seconds - explicit to survive ESP-IDF default changes
@@ -1088,6 +1238,9 @@ esp_err_t api_server_start(void)
         {.uri = "/api/info", .method = HTTP_GET, .handler = info_handler},
         {.uri = "/api/ota", .method = HTTP_GET, .handler = ota_get_handler},
         {.uri = "/api/ota", .method = HTTP_POST, .handler = ota_post_handler},
+        {.uri = "/api/coredump", .method = HTTP_GET, .handler = coredump_get_handler},
+        {.uri = "/api/coredump/raw", .method = HTTP_GET, .handler = coredump_raw_handler},
+        {.uri = "/api/coredump/clear", .method = HTTP_POST, .handler = coredump_clear_handler},
     };
 
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {

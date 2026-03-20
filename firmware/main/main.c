@@ -361,9 +361,11 @@ void app_main(void)
         int64_t now_us = esp_timer_get_time();
         if (now_us - last_history_save_us >= (int64_t)HISTORY_SAVE_INTERVAL_S * 1000000) {
             // Save VOC algorithm state alongside history (only effective after 3h uptime)
+            esp_task_wdt_reset();
             sen55_save_voc_state();
 
             ESP_LOGI(TAG, "Auto-saving history to flash...");
+            esp_task_wdt_reset();
             if (history_save() == ESP_OK) {
                 ESP_LOGI(TAG, "History auto-save complete");
                 last_history_save_us = now_us;
