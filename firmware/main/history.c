@@ -3,7 +3,7 @@
  * @brief Tiered historical data storage implementation
  *
  * Memory layout (all static, pre-allocated):
- * - Raw:     1800 samples × 36 bytes = 64,800 bytes (~1 hour @ 2s)
+ * - Raw:     1800 samples × 36 bytes = 64,800 bytes (~30 min @ 1s)
  * - Fine:    360 samples × 36 bytes  = 12,960 bytes (6 hours @ 1min)
  * - Medium:  144 samples × 36 bytes  =  5,184 bytes (24 hours @ 10min)
  * - Coarse:  168 samples × 36 bytes  =  6,048 bytes (7 days @ 1hr)
@@ -33,7 +33,7 @@ static const char *TAG = "history";
 // Tier Configuration
 // =============================================================================
 
-#define RAW_CAPACITY      1800    // ~1 hour at 2s intervals
+#define RAW_CAPACITY      1800    // ~30 min at 1s intervals
 #define FINE_CAPACITY     360     // 6 hours at 1 min
 #define MEDIUM_CAPACITY   144     // 24 hours at 10 min
 #define COARSE_CAPACITY   168     // 7 days at 1 hour
@@ -41,7 +41,7 @@ static const char *TAG = "history";
 #define ARCHIVE_CAPACITY  1095    // 3 years at 24 hours
 
 // Samples to average when compacting to next tier
-#define RAW_TO_FINE_RATIO      30    // 30 × 2s = 1 min
+#define RAW_TO_FINE_RATIO      60    // 60 × 1s = 1 min
 #define FINE_TO_MEDIUM_RATIO   10    // 10 × 1min = 10 min
 #define MEDIUM_TO_COARSE_RATIO 6     // 6 × 10min = 1 hour
 #define COARSE_TO_DAILY_RATIO  6     // 6 × 1hr = 6 hours
@@ -290,7 +290,7 @@ esp_err_t history_init(void)
     tiers[TIER_RAW] = (tier_state_t){
         .buffer = raw_buffer,
         .capacity = RAW_CAPACITY,
-        .resolution_s = 2,
+        .resolution_s = 1,
         .compact_ratio = RAW_TO_FINE_RATIO
     };
 
@@ -368,7 +368,7 @@ esp_err_t history_init(void)
 
     ESP_LOGI(TAG, "History initialized: %lu bytes allocated", total_bytes);
     ESP_LOGI(TAG, "  Raw:     %d samples (%.1f hours)", RAW_CAPACITY,
-             RAW_CAPACITY * 2.0 / 3600);
+             RAW_CAPACITY * 1.0 / 3600);
     ESP_LOGI(TAG, "  Fine:    %d samples (%d hours)", FINE_CAPACITY,
              FINE_CAPACITY / 60);
     ESP_LOGI(TAG, "  Medium:  %d samples (%d hours)", MEDIUM_CAPACITY,

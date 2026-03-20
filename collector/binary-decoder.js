@@ -3,7 +3,7 @@ const HEADER_SIZE = 28;
 const TIER_NAMES = ['raw', 'fine', 'medium', 'coarse', 'daily', 'archive'];
 
 const TIER_RESOLUTIONS = {
-  raw: 2,
+  raw: 1,
   fine: 60,
   medium: 600,
   coarse: 3600,

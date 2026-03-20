@@ -5,7 +5,7 @@ import { HardDrive, Download, Save, Loader2, Check, X, Database } from 'lucide-r
 import { saveHistoryToFlash, getHistoryRaw } from '../api/esp32';
 
 const TIERS = [
-  { key: 'raw', label: '1h', resolution: '2s' },
+  { key: 'raw', label: '30m', resolution: '1s' },
   { key: 'fine', label: '6h', resolution: '1m' },
   { key: 'medium', label: '24h', resolution: '10m' },
   { key: 'coarse', label: '7d', resolution: '1h' },

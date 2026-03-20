@@ -112,7 +112,7 @@ Data is stored at multiple resolutions, automatically compacted from fine to coa
 
 | Tier | Resolution | Retention | Samples |
 |------|------------|-----------|---------|
-| `raw` | 2 sec | ~1 hour | 1,800 |
+| `raw` | 1 sec | ~30 min | 1,800 |
 | `fine` | 1 min | 6 hours | 360 |
 | `medium` | 10 min | 24 hours | 144 |
 | `coarse` | 1 hour | 7 days | 168 |

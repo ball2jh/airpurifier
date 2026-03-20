@@ -8,7 +8,7 @@
  * - All memory pre-allocated at startup (no runtime malloc)
  *
  * Tier structure:
- * - Raw:     2 sec resolution,  ~1 hour
+ * - Raw:     1 sec resolution,  ~30 min
  * - Fine:    1 min resolution,  6 hours
  * - Medium:  10 min resolution, 24 hours
  * - Coarse:  1 hour resolution, 7 days
@@ -45,7 +45,7 @@ typedef struct {
  * @brief Tier identifiers
  */
 typedef enum {
-    TIER_RAW = 0,       // 2 second samples
+    TIER_RAW = 0,       // 1 second samples
     TIER_FINE,          // 1 minute averages
     TIER_MEDIUM,        // 10 minute averages
     TIER_COARSE,        // 1 hour averages

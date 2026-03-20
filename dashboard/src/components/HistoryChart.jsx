@@ -29,9 +29,9 @@ export function useWindowWidth() {
 }
 
 export const TIERS = [
-  { key: '15m', label: '15m', resolution: 2, resolutionLabel: '2s', apiKey: 'raw', maxAge: 900 },
-  { key: '30m', label: '30m', resolution: 2, resolutionLabel: '2s', apiKey: 'raw', maxAge: 1800 },
-  { key: 'raw', label: '1h', resolution: 2, resolutionLabel: '2s' },
+  { key: '15m', label: '15m', resolution: 1, resolutionLabel: '1s', apiKey: 'raw', maxAge: 900 },
+  { key: '30m', label: '30m', resolution: 1, resolutionLabel: '1s', apiKey: 'raw', maxAge: 1800 },
+  { key: 'raw', label: '30m', resolution: 1, resolutionLabel: '1s' },
   { key: 'fine', label: '6h', resolution: 60, resolutionLabel: '1m', source: 'archive', maxAge: 21600 },
   { key: 'medium', label: '24h', resolution: 60, resolutionLabel: '1m', source: 'archive', maxAge: 86400 },
   { key: 'coarse', label: '7d', resolution: 300, resolutionLabel: '5m', source: 'archive', maxAge: 604800 },

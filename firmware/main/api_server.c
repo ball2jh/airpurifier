@@ -96,7 +96,7 @@ static esp_err_t options_handler(httpd_req_t *req)
  * @brief Resolution in seconds for each tier
  */
 static const uint32_t tier_resolutions[TIER_COUNT] = {
-    2,      // TIER_RAW
+    1,      // TIER_RAW
     60,     // TIER_FINE
     600,    // TIER_MEDIUM
     3600,   // TIER_COARSE
@@ -110,7 +110,7 @@ static const uint32_t tier_resolutions[TIER_COUNT] = {
  * Matched to actual storage capacity of each tier
  */
 static const uint32_t view_time_windows[TIER_COUNT] = {
-    3600,       // raw view: 1 hour (1800 × 2s)
+    1800,       // raw view: 30 min (1800 × 1s)
     21600,      // fine view: 6 hours (360 × 60s)
     86400,      // medium view: 24 hours (144 × 600s)
     604800,     // coarse view: 7 days (168 × 3600s)
@@ -794,6 +794,17 @@ static esp_err_t info_handler(httpd_req_t *req)
         default:                reason_str = "unknown"; break;
     }
     cJSON_AddStringToObject(root, "reset_reason", reason_str);
+
+    // Sensor identity
+    sen55_identity_t sen_id;
+    if (sen55_get_identity(&sen_id)) {
+        cJSON *sensor = cJSON_AddObjectToObject(root, "sensor");
+        cJSON_AddStringToObject(sensor, "product", sen_id.product_name);
+        cJSON_AddStringToObject(sensor, "serial", sen_id.serial_number);
+        char fw_str[8];
+        snprintf(fw_str, sizeof(fw_str), "%u.%u", sen_id.firmware_major, sen_id.firmware_minor);
+        cJSON_AddStringToObject(sensor, "firmware", fw_str);
+    }
 
     // Free heap
     cJSON_AddNumberToObject(root, "free_heap", esp_get_free_heap_size());

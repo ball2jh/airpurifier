@@ -33,7 +33,7 @@ static const char *TAG = "main";
 // Configuration
 // =============================================================================
 
-#define MONITOR_INTERVAL_MS     2000    // Sensor/fan read interval
+#define MONITOR_INTERVAL_MS     1000    // Sensor/fan read interval
 #define HEALTH_LOG_INTERVAL     30      // Log health every N monitor cycles
 #define WATCHDOG_TIMEOUT_S      30      // Watchdog timeout (seconds)
 #define MAX_SENSOR_FAILURES     5       // Sensor failures before recovery
