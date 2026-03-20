@@ -88,19 +88,19 @@ export default function StatisticsSummaryCard({ samples = [], visibleMetrics = [
               </div>
               <div className="grid grid-cols-3 gap-2 text-center">
                 <div>
-                  <p className="text-[10px] text-overlay uppercase">Min</p>
+                  <p className="text-xs text-overlay uppercase">Min</p>
                   <p className="text-sm font-semibold tabular-nums text-text">
                     {stats.min.toFixed(1)}
                   </p>
                 </div>
                 <div>
-                  <p className="text-[10px] text-overlay uppercase">Avg</p>
+                  <p className="text-xs text-overlay uppercase">Avg</p>
                   <p className="text-sm font-semibold tabular-nums text-text">
                     {stats.avg.toFixed(1)}
                   </p>
                 </div>
                 <div>
-                  <p className="text-[10px] text-overlay uppercase">Max</p>
+                  <p className="text-xs text-overlay uppercase">Max</p>
                   <p className="text-sm font-semibold tabular-nums text-text">
                     {stats.max.toFixed(1)}
                   </p>

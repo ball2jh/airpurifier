@@ -1,6 +1,7 @@
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
+import { STATUS_COLORS } from '../constants/colors';
 
 const RANGES = {
   voc: { good: 100, moderate: 200, max: 500, label: 'VOC Index', desc: 'Volatile organic compounds' },
@@ -20,21 +21,14 @@ export default function SecondaryMetric({ type, value, onClick }) {
   const status = getStatus(type, value);
   const percent = value != null ? Math.min(100, (value / range.max) * 100) : 0;
 
-  const colorClasses = {
-    green: { text: 'text-green', bar: 'bg-green' },
-    yellow: { text: 'text-yellow', bar: 'bg-yellow' },
-    red: { text: 'text-red', bar: 'bg-red' },
-    overlay: { text: 'text-overlay', bar: 'bg-overlay' },
-  };
-
-  const colors = colorClasses[status.color];
+  const colors = STATUS_COLORS[status.color];
 
   return (
     <Card className={`p-4 sm:p-5 border-0 ${status.bg} overflow-hidden cursor-pointer hover:ring-2 hover:ring-surface-1 transition-shadow`} onClick={onClick}>
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between mb-3 gap-1 sm:gap-2">
         <div>
-          <p className="text-[10px] sm:text-xs font-medium text-subtext uppercase tracking-wider">{range.label}</p>
-          <p className="text-[10px] sm:text-xs text-overlay mt-0.5">{range.desc}</p>
+          <p className="text-xs sm:text-sm font-medium text-subtext uppercase tracking-wider">{range.label}</p>
+          <p className="text-xs text-overlay mt-0.5">{range.desc}</p>
         </div>
         <Badge variant={status.level === 'good' ? 'good' : status.level === 'moderate' ? 'moderate' : 'poor'}>
           {status.label}

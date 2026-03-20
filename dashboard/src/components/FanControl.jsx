@@ -573,10 +573,10 @@ export default function FanControl() {
                       >
                         {t.speed}%
                       </div>
-                      <div className={`text-[10px] ${isActive ? 'text-text' : 'text-overlay'}`}>
+                      <div className={`text-xs ${isActive ? 'text-text' : 'text-overlay'}`}>
                         {t.label}
                       </div>
-                      <div className="text-[9px] text-overlay">
+                      <div className="text-xs text-overlay">
                         {i === 0 ? '<5' : i === 3 ? '>25' : `${autoThresholds[i-1]?.max || 0}-${t.max}`}
                       </div>
                     </div>

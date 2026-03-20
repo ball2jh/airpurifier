@@ -109,7 +109,7 @@ export default function PeriodComparisonCard({ samples = [], visibleMetrics = []
           vs Previous {tierInfo?.label || tier}
         </p>
       </div>
-      <p className="text-[10px] text-overlay mb-4">Period-over-period comparison</p>
+      <p className="text-xs text-overlay mb-4">Period-over-period comparison</p>
 
       <div className="space-y-3">
         {visibleMetrics.map(metricKey => {

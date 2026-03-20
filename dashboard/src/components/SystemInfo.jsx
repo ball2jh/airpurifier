@@ -4,6 +4,7 @@ import { getInfo, getOta } from '../api/esp32';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
+import { formatBytes } from '../utils/formatters';
 
 function InfoItem({ icon: Icon, label, value }) {
   return (
@@ -27,12 +28,6 @@ export default function SystemInfo({ health }) {
     queryFn: getOta,
     refetchInterval: 5000,
   });
-
-  const formatBytes = (bytes) => {
-    if (bytes > 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-    if (bytes > 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-    return `${bytes} B`;
-  };
 
   return (
     <Card className="p-4 sm:p-6 border-surface-1 overflow-hidden">

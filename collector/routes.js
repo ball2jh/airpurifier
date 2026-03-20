@@ -3,22 +3,32 @@ const { queryAggregated, getStats, iterateRawSamples, clearAll, queryPmNumberAgg
 
 const router = express.Router();
 
+function validateTimeRange(query) {
+  const from = parseInt(query.from);
+  const to = parseInt(query.to);
+  const resolution = parseInt(query.resolution) || 3600;
+
+  if (isNaN(from) || isNaN(to)) {
+    return { error: 'from and to are required (unix timestamps)' };
+  }
+  if (resolution < 1) {
+    return { error: 'resolution must be >= 1' };
+  }
+  if (from >= to) {
+    return { error: 'from must be less than to' };
+  }
+
+  return { from, to, resolution };
+}
+
 // GET /archive/query?from=<ts>&to=<ts>&resolution=<seconds>
 router.get('/archive/query', (req, res, next) => {
   try {
-    const from = parseInt(req.query.from);
-    const to = parseInt(req.query.to);
-    const resolution = parseInt(req.query.resolution) || 3600;
-
-    if (isNaN(from) || isNaN(to)) {
-      return res.status(400).json({ error: 'from and to are required (unix timestamps)' });
+    const params = validateTimeRange(req.query);
+    if (params.error) {
+      return res.status(400).json({ error: params.error });
     }
-    if (resolution < 1) {
-      return res.status(400).json({ error: 'resolution must be >= 1' });
-    }
-    if (from >= to) {
-      return res.status(400).json({ error: 'from must be less than to' });
-    }
+    const { from, to, resolution } = params;
 
     const samples = queryAggregated(from, to, resolution);
     res.json({ samples, resolution, from, to, count: samples.length });
@@ -41,15 +51,11 @@ router.get('/archive/stats', (req, res, next) => {
 // GET /archive/export?from=<ts>&to=<ts>&format=csv
 router.get('/archive/export', (req, res, next) => {
   try {
-    const from = parseInt(req.query.from);
-    const to = parseInt(req.query.to);
-
-    if (isNaN(from) || isNaN(to)) {
-      return res.status(400).json({ error: 'from and to are required (unix timestamps)' });
+    const params = validateTimeRange(req.query);
+    if (params.error) {
+      return res.status(400).json({ error: params.error });
     }
-    if (from >= to) {
-      return res.status(400).json({ error: 'from must be less than to' });
-    }
+    const { from, to } = params;
 
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', `attachment; filename="esp32-history-${from}-${to}.csv"`);
@@ -67,19 +73,11 @@ router.get('/archive/export', (req, res, next) => {
 // GET /archive/pm-number/query?from=<ts>&to=<ts>&resolution=<seconds>
 router.get('/archive/pm-number/query', (req, res, next) => {
   try {
-    const from = parseInt(req.query.from);
-    const to = parseInt(req.query.to);
-    const resolution = parseInt(req.query.resolution) || 3600;
-
-    if (isNaN(from) || isNaN(to)) {
-      return res.status(400).json({ error: 'from and to are required (unix timestamps)' });
+    const params = validateTimeRange(req.query);
+    if (params.error) {
+      return res.status(400).json({ error: params.error });
     }
-    if (resolution < 1) {
-      return res.status(400).json({ error: 'resolution must be >= 1' });
-    }
-    if (from >= to) {
-      return res.status(400).json({ error: 'from must be less than to' });
-    }
+    const { from, to, resolution } = params;
 
     const samples = queryPmNumberAggregated(from, to, resolution);
     res.json({ samples, resolution, from, to, count: samples.length });
@@ -92,6 +90,7 @@ router.get('/archive/pm-number/query', (req, res, next) => {
 router.get('/archive/pm-number/stats', (req, res, next) => {
   try {
     const stats = getPmNumberStats();
+    stats.collecting = true;
     res.json(stats);
   } catch (err) {
     next(err);

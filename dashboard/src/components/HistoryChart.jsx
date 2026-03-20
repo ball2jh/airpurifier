@@ -14,6 +14,7 @@ import { RotateCcw } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { calculateAQI } from './AQICard';
 import { useTemperatureUnit, convertTemp, tempUnit } from '@/utils/temperature';
+import { formatTimestamp } from '../utils/formatters';
 
 // Hook to get window width for responsive tick count
 export function useWindowWidth() {
@@ -107,48 +108,6 @@ const RANGE_METRICS = new Set(['pm1_0', 'pm2_5', 'pm4_0', 'pm10', 'humidity', 't
 
 export const DEFAULT_TIER = 'fine';
 export const DEFAULT_METRICS = ['pm2_5'];
-
-function formatTimestamp(unixSeconds, tier, forTooltip = false) {
-  const date = new Date(unixSeconds * 1000);
-  const now = new Date();
-  const isToday = date.toDateString() === now.toDateString();
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const isYesterday = date.toDateString() === yesterday.toDateString();
-
-  // For tooltip - show more detail based on tier
-  if (forTooltip) {
-    const timeOpts = (tier === 'raw' || tier === '15m' || tier === '30m')
-      ? { hour: 'numeric', minute: '2-digit', second: '2-digit' }
-      : { hour: 'numeric', minute: '2-digit' };
-    const timeStr = date.toLocaleTimeString([], timeOpts);
-
-    if (isToday) return timeStr;
-    if (isYesterday) return `Yesterday ${timeStr}`;
-    const dayName = date.toLocaleDateString([], { weekday: 'short' });
-    const dateStr = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
-    return `${dayName} ${dateStr} ${timeStr}`;
-  }
-
-  const timeStr = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-
-  // For axis labels - keep compact based on tier
-  if (tier === 'raw' || tier === '15m' || tier === '30m' || tier === 'fine') {
-    return timeStr;
-  }
-  if (tier === 'medium') {
-    if (isToday) return timeStr;
-    return date.toLocaleDateString([], { weekday: 'short', hour: 'numeric' });
-  }
-  if (tier === 'coarse') {
-    return date.toLocaleDateString([], { weekday: 'short', hour: 'numeric' });
-  }
-  if (tier === 'daily' || tier === 'archive') {
-    return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
-  }
-  // 1y/all - show month and year
-  return date.toLocaleDateString([], { month: 'short', year: '2-digit' });
-}
 
 function CustomTooltip({ active, payload, label, normalized, metricRanges, tier, tempUnitLabel, hasRange }) {
   if (!active || !payload?.length) return null;
@@ -475,7 +434,7 @@ export default function HistoryChart({ tier, setTier, visibleMetrics, setVisible
             <XAxis
               dataKey="timestamp"
               stroke="#6c7086"
-              tick={{ fontSize: windowWidth < 640 ? 9 : 10 }}
+              tick={{ fontSize: 10 }}
               tickFormatter={(v) => formatTimestamp(v, tier)}
               type="number"
               domain={['dataMin', 'dataMax']}
@@ -485,7 +444,7 @@ export default function HistoryChart({ tier, setTier, visibleMetrics, setVisible
               <YAxis
                 yAxisId="left"
                 stroke="#cba6f7"
-                tick={{ fontSize: windowWidth < 640 ? 9 : 11 }}
+                tick={{ fontSize: windowWidth < 640 ? 10 : 11 }}
                 width={windowWidth < 640 ? 35 : 45}
                 domain={[0, 100]}
                 tickFormatter={(v) => `${v}%`}
@@ -495,7 +454,7 @@ export default function HistoryChart({ tier, setTier, visibleMetrics, setVisible
                 <YAxis
                   yAxisId="left"
                   stroke="#6c7086"
-                  tick={{ fontSize: windowWidth < 640 ? 9 : 11 }}
+                  tick={{ fontSize: windowWidth < 640 ? 10 : 11 }}
                   width={windowWidth < 640 ? 35 : 45}
                   domain={autoScale ? [dataMin => Math.floor(dataMin * 0.95), dataMax => Math.ceil(dataMax * 1.05)] : [0, 'auto']}
                   allowDecimals={false}
@@ -505,7 +464,7 @@ export default function HistoryChart({ tier, setTier, visibleMetrics, setVisible
                     yAxisId="right"
                     orientation="right"
                     stroke="#94e2d5"
-                    tick={{ fontSize: windowWidth < 640 ? 9 : 11 }}
+                    tick={{ fontSize: windowWidth < 640 ? 10 : 11 }}
                     width={windowWidth < 640 ? 35 : 45}
                     domain={autoScale ? [dataMin => Math.floor(dataMin * 0.95), dataMax => Math.ceil(dataMax * 1.05)] : [0, 'auto']}
                     allowDecimals={false}

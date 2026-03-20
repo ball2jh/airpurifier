@@ -3,16 +3,8 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
-
-// EPA AQI breakpoints for PM2.5 (24-hour average, but we use instantaneous)
-const AQI_BREAKPOINTS = [
-  { cLow: 0, cHigh: 12.0, iLow: 0, iHigh: 50, category: 'Good', color: 'green', description: 'Air quality is satisfactory' },
-  { cLow: 12.1, cHigh: 35.4, iLow: 51, iHigh: 100, category: 'Moderate', color: 'yellow', description: 'Unusually sensitive people should limit outdoor exertion' },
-  { cLow: 35.5, cHigh: 55.4, iLow: 101, iHigh: 150, category: 'Unhealthy for Sensitive Groups', color: 'orange', description: 'Sensitive groups may experience effects' },
-  { cLow: 55.5, cHigh: 150.4, iLow: 151, iHigh: 200, category: 'Unhealthy', color: 'red', description: 'Everyone may experience health effects' },
-  { cLow: 150.5, cHigh: 250.4, iLow: 201, iHigh: 300, category: 'Very Unhealthy', color: 'purple', description: 'Health alert: risk increased for everyone' },
-  { cLow: 250.5, cHigh: 500.4, iLow: 301, iHigh: 500, category: 'Hazardous', color: 'maroon', description: 'Emergency conditions' },
-];
+import { STATUS_COLORS } from '../constants/colors';
+import { PM25_BREAKPOINTS } from '../constants/thresholds';
 
 export function calculateAQI(pm25) {
   if (pm25 == null || pm25 < 0) return null;
@@ -21,11 +13,11 @@ export function calculateAQI(pm25) {
   pm25 = Math.floor(pm25 * 10) / 10;
 
   // Find the appropriate breakpoint
-  const bp = AQI_BREAKPOINTS.find(b => pm25 >= b.cLow && pm25 <= b.cHigh);
+  const bp = PM25_BREAKPOINTS.find(b => pm25 >= b.cLow && pm25 <= b.cHigh);
 
   if (!bp) {
     // Above scale - return max AQI with hazardous category
-    return { aqi: 500, ...AQI_BREAKPOINTS[5] };
+    return { aqi: 500, ...PM25_BREAKPOINTS[5] };
   }
 
   // Linear interpolation: AQI = ((iHigh - iLow) / (cHigh - cLow)) * (C - cLow) + iLow
@@ -138,7 +130,7 @@ function Sparkline({ samples, color }) {
           strokeLinejoin="round"
         />
       </svg>
-      <div className="flex justify-between text-[10px] text-overlay mt-1">
+      <div className="flex justify-between text-xs text-overlay mt-1">
         <span>{startLabel}</span>
         <span>{endLabel}</span>
       </div>
@@ -153,17 +145,7 @@ export default function AQICard({ pm25, samples, onClick, onPM25Click }) {
   // Progress bar: 0-500 AQI scale, but cap visual at 300 for better UX
   const percent = aqiData ? Math.min(100, (aqiData.aqi / 300) * 100) : 0;
 
-  const colorMap = {
-    green: { bg: 'bg-green/10', text: 'text-green', bar: 'bg-green', hex: '#a6e3a1' },
-    yellow: { bg: 'bg-yellow/10', text: 'text-yellow', bar: 'bg-yellow', hex: '#f9e2af' },
-    orange: { bg: 'bg-orange/10', text: 'text-orange', bar: 'bg-orange', hex: '#fab387' },
-    red: { bg: 'bg-red/10', text: 'text-red', bar: 'bg-red', hex: '#f38ba8' },
-    purple: { bg: 'bg-purple/10', text: 'text-purple', bar: 'bg-purple', hex: '#cba6f7' },
-    maroon: { bg: 'bg-red/20', text: 'text-red', bar: 'bg-red', hex: '#f38ba8' },
-    gray: { bg: 'bg-surface-1/50', text: 'text-overlay', bar: 'bg-overlay', hex: '#6c7086' },
-  };
-
-  const colors = colorMap[aqiData?.color || 'gray'];
+  const colors = STATUS_COLORS[aqiData?.color || 'gray'];
 
   const badgeVariant = aqiData?.color === 'green' ? 'good' :
                        aqiData?.color === 'yellow' ? 'moderate' : 'poor';
@@ -176,7 +158,7 @@ export default function AQICard({ pm25, samples, onClick, onPM25Click }) {
         <div className="flex items-start justify-between mb-4">
           <div>
             <p className="text-xs sm:text-sm font-medium text-subtext uppercase tracking-wider">Air Quality Index</p>
-            <p className="text-[10px] sm:text-xs text-overlay mt-1">US EPA Standard</p>
+            <p className="text-xs text-overlay mt-1">US EPA Standard</p>
           </div>
 
           {trend && (
@@ -216,7 +198,7 @@ export default function AQICard({ pm25, samples, onClick, onPM25Click }) {
             {pm25 != null ? pm25.toFixed(1) : '--'}
           </span>
           <span className="text-xs text-overlay">µg/m³</span>
-          <span className="text-[10px] text-overlay opacity-0 group-hover:opacity-100 transition-opacity ml-1">→ details</span>
+          <span className="text-xs text-overlay opacity-0 group-hover:opacity-100 transition-opacity ml-1">→ details</span>
         </button>
 
         <div className="mb-4">
@@ -230,7 +212,7 @@ export default function AQICard({ pm25, samples, onClick, onPM25Click }) {
           style={{ '--tw-shadow-color': colors.hex }}
         />
 
-        <div className="flex justify-between text-[10px] text-overlay mt-2">
+        <div className="flex justify-between text-xs text-overlay mt-2">
           <span>0</span>
           <span>50</span>
           <span>100</span>

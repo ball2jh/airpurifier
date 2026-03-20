@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react';
 import { Card } from '@/components/ui/card';
 import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { STATUS_COLORS } from '../constants/colors';
 
 const TIMESPAN_OPTIONS = [
   { key: 'hour', label: '1h', tier: 'raw' },
@@ -103,7 +104,7 @@ function DistributionGauge({ percentile, minValue, maxValue, avgValue }) {
       </div>
 
       {/* Scale labels with values */}
-      <div className="flex justify-between mt-3 text-[10px]">
+      <div className="flex justify-between mt-3 text-xs">
         <div className="text-left">
           <span className="text-green font-semibold tabular-nums">{minValue?.toFixed(1)}</span>
           <span className="text-overlay ml-1">best</span>
@@ -185,15 +186,7 @@ export default function RelativeAirQuality({ rawSamples = [], fineSamples = [], 
 
   const status = getStatus(analysis.percentile);
 
-  const colorMap = {
-    green: { bg: 'bg-green/10', text: 'text-green', bar: 'bg-green' },
-    yellow: { bg: 'bg-yellow/10', text: 'text-yellow', bar: 'bg-yellow' },
-    orange: { bg: 'bg-orange/10', text: 'text-orange', bar: 'bg-orange' },
-    red: { bg: 'bg-red/10', text: 'text-red', bar: 'bg-red' },
-    overlay: { bg: 'bg-surface-1/50', text: 'text-overlay', bar: 'bg-overlay' },
-  };
-
-  const colors = colorMap[status.color];
+  const colors = STATUS_COLORS[status.color];
   const hasData = analysis.sampleCount > 0;
 
   return (
@@ -206,7 +199,7 @@ export default function RelativeAirQuality({ rawSamples = [], fineSamples = [], 
             <p className="text-xs sm:text-sm font-medium text-subtext uppercase tracking-wider">
               Compared to Your History
             </p>
-            <p className="text-[10px] sm:text-xs text-overlay mt-1">
+            <p className="text-xs text-overlay mt-1">
               Based on {analysis.sampleCount.toLocaleString()} reading{analysis.sampleCount !== 1 ? 's' : ''}
             </p>
           </div>
@@ -266,7 +259,7 @@ export default function RelativeAirQuality({ rawSamples = [], fineSamples = [], 
             />
 
             {/* Median and typical range */}
-            <div className="flex justify-between mt-4 pt-3 border-t border-surface-1/50 text-[10px] text-overlay">
+            <div className="flex justify-between mt-4 pt-3 border-t border-surface-1/50 text-xs text-overlay">
               <span>Median: <span className="text-subtext font-medium">{analysis.p50?.toFixed(1)}</span></span>
               <span>Typical: <span className="text-subtext font-medium">{analysis.p25?.toFixed(1)}–{analysis.p75?.toFixed(1)}</span></span>
             </div>

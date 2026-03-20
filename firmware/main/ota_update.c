@@ -53,7 +53,7 @@ static TaskHandle_t s_ota_task_handle = NULL;
 
 static void set_status(ota_state_t state, int progress, const char *error)
 {
-    if (xSemaphoreTake(s_status_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+    if (xSemaphoreTake(s_status_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {  // just protecting a status struct
         s_status.state = state;
         s_status.progress_percent = progress;
         if (error != NULL) {

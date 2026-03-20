@@ -1,5 +1,6 @@
 import { Card } from '@/components/ui/card';
 import { TIERS } from './HistoryChart';
+import { formatTimestamp } from '../utils/formatters';
 
 const PM25_THRESHOLDS = [
   { level: 12.0, label: 'Moderate', color: 'yellow', bgClass: 'bg-yellow', textClass: 'text-yellow' },
@@ -13,23 +14,6 @@ function formatDuration(seconds) {
   const hours = Math.floor(seconds / 3600);
   const mins = Math.round((seconds % 3600) / 60);
   return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
-}
-
-function formatTimestamp(unixSeconds) {
-  const date = new Date(unixSeconds * 1000);
-  const now = new Date();
-  const isToday = date.toDateString() === now.toDateString();
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const isYesterday = date.toDateString() === yesterday.toDateString();
-
-  const timeStr = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-
-  if (isToday) return timeStr;
-  if (isYesterday) return `Yesterday ${timeStr}`;
-  const dayName = date.toLocaleDateString([], { weekday: 'short' });
-  const dateStr = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
-  return `${dayName} ${dateStr} ${timeStr}`;
 }
 
 function analyzePeakEvents(samples, tier) {
@@ -101,7 +85,7 @@ export default function PeakEventsCard({ samples = [], tier }) {
                 {analysis.peak.toFixed(1)} <span className="text-xs text-overlay">µg/m³</span>
               </span>
               {analysis.peakTimestamp != null && (
-                <p className="text-[10px] text-overlay">{formatTimestamp(analysis.peakTimestamp)}</p>
+                <p className="text-xs text-overlay">{formatTimestamp(analysis.peakTimestamp, null, true)}</p>
               )}
             </div>
           </div>

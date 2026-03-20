@@ -1,6 +1,7 @@
 import { Thermometer, Droplets } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
+import { STATUS_COLORS } from '../constants/colors';
 
 function getTempStatus(value, unit) {
   if (value == null) return { label: '--', color: 'overlay', bg: 'bg-surface-1/30' };
@@ -19,24 +20,16 @@ function getHumidityStatus(value) {
 }
 
 function EnvironmentCard({ icon: Icon, label, value, unit, status, percent, onClick }) {
-  const colorClasses = {
-    blue: { text: 'text-blue', bar: 'bg-blue', icon: 'text-blue' },
-    green: { text: 'text-green', bar: 'bg-green', icon: 'text-green' },
-    orange: { text: 'text-orange', bar: 'bg-orange', icon: 'text-orange' },
-    cyan: { text: 'text-cyan', bar: 'bg-cyan', icon: 'text-cyan' },
-    overlay: { text: 'text-overlay', bar: 'bg-overlay', icon: 'text-overlay' },
-  };
-
-  const colors = colorClasses[status.color];
+  const colors = STATUS_COLORS[status.color];
 
   return (
     <Card className={`p-4 sm:p-5 border-0 overflow-hidden ${status.bg} cursor-pointer hover:ring-2 hover:ring-surface-1 transition-shadow`} onClick={onClick}>
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between mb-3 gap-1 sm:gap-2">
         <div className="flex items-center gap-2">
           <Icon className={`w-4 h-4 sm:w-5 sm:h-5 ${colors.icon}`} />
-          <span className="text-[10px] sm:text-xs font-medium text-subtext uppercase tracking-wider">{label}</span>
+          <span className="text-xs sm:text-sm font-medium text-subtext uppercase tracking-wider">{label}</span>
         </div>
-        <span className={`text-[10px] sm:text-xs font-semibold uppercase ${colors.text}`}>{status.label}</span>
+        <span className={`text-xs font-semibold uppercase ${colors.text}`}>{status.label}</span>
       </div>
 
       <div className="flex items-baseline gap-2 mb-4">

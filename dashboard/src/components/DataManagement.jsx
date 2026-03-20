@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Card } from '@/components/ui/card';
 import { HardDrive, Download, Save, Loader2, Check, X, Database, Wind, Trash2 } from 'lucide-react';
 import { saveHistoryToFlash, getHistoryRaw, getArchiveStats, clearArchive, resetDevice, triggerSensorClean, getHealth } from '../api/esp32';
+import { formatBytes } from '../utils/formatters';
 
 const TIERS = [
   { key: 'raw', label: '30m', resolution: '1s' },
@@ -12,12 +13,6 @@ const TIERS = [
   { key: 'daily', label: '30d', resolution: '6h' },
   { key: 'archive', label: '3y', resolution: '24h' },
 ];
-
-const formatBytes = (bytes) => {
-  if (bytes > 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  if (bytes > 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-  return `${bytes} B`;
-};
 
 export default function DataManagement() {
   const [saveStatus, setSaveStatus] = useState(null); // null, 'loading', 'success', 'error'
