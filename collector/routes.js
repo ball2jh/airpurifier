@@ -1,5 +1,5 @@
 const express = require('express');
-const { queryAggregated, getStats, iterateRawSamples } = require('./db');
+const { queryAggregated, getStats, iterateRawSamples, clearAll, queryPmNumberAggregated, getPmNumberStats } = require('./db');
 
 const router = express.Router();
 
@@ -59,6 +59,51 @@ router.get('/archive/export', (req, res, next) => {
       res.write(`${s.timestamp},${s.pm1_0},${s.pm2_5},${s.pm4_0},${s.pm10},${s.humidity},${s.temperature},${s.voc_index},${s.nox_index},${s.fan_rpm},${s.fan_speed}\n`);
     }
     res.end();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /archive/pm-number/query?from=<ts>&to=<ts>&resolution=<seconds>
+router.get('/archive/pm-number/query', (req, res, next) => {
+  try {
+    const from = parseInt(req.query.from);
+    const to = parseInt(req.query.to);
+    const resolution = parseInt(req.query.resolution) || 3600;
+
+    if (isNaN(from) || isNaN(to)) {
+      return res.status(400).json({ error: 'from and to are required (unix timestamps)' });
+    }
+    if (resolution < 1) {
+      return res.status(400).json({ error: 'resolution must be >= 1' });
+    }
+    if (from >= to) {
+      return res.status(400).json({ error: 'from must be less than to' });
+    }
+
+    const samples = queryPmNumberAggregated(from, to, resolution);
+    res.json({ samples, resolution, from, to, count: samples.length });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /archive/pm-number/stats
+router.get('/archive/pm-number/stats', (req, res, next) => {
+  try {
+    const stats = getPmNumberStats();
+    res.json(stats);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// DELETE /archive/data — clear all collected samples
+router.delete('/archive/data', (req, res, next) => {
+  try {
+    const stats = getStats();
+    clearAll();
+    res.json({ cleared: stats.total_samples });
   } catch (err) {
     next(err);
   }

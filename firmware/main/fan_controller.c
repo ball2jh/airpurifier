@@ -91,10 +91,10 @@ static atomic_uint_fast32_t startup_grace_countdown = 0;  // ISR decrements; sta
 static fan_health_t health = {0};
 static portMUX_TYPE health_spinlock = portMUX_INITIALIZER_UNLOCKED;
 
-// Auto mode state
-static fan_mode_t current_mode = FAN_MODE_MANUAL;
-static uint8_t auto_target_speed = AUTO_SPEED_MIN;
-static int64_t manual_mode_start_us = 0;  // Timestamp when manual mode was entered
+// Auto mode state (accessed from main loop and HTTP server task)
+static atomic_int current_mode = FAN_MODE_MANUAL;
+static atomic_uint_fast8_t auto_target_speed = AUTO_SPEED_MIN;
+static atomic_int_fast64_t manual_mode_start_us = 0;
 
 // =============================================================================
 // Timer ISR - RPM Calculation and Stall Detection
@@ -385,7 +385,7 @@ void fan_reset_health(void)
 
 fan_mode_t fan_get_mode(void)
 {
-    return current_mode;
+    return (fan_mode_t)atomic_load(&current_mode);
 }
 
 void fan_set_mode(fan_mode_t mode)
@@ -395,8 +395,8 @@ void fan_set_mode(fan_mode_t mode)
         return;
     }
 
-    fan_mode_t old_mode = current_mode;
-    current_mode = mode;
+    fan_mode_t old_mode = (fan_mode_t)atomic_load(&current_mode);
+    atomic_store(&current_mode, mode);
 
     if (old_mode != mode) {
         ESP_LOGI(TAG, "Fan mode changed: %s -> %s",
@@ -405,21 +405,21 @@ void fan_set_mode(fan_mode_t mode)
 
         if (mode == FAN_MODE_MANUAL) {
             // Record when we entered manual mode for timeout tracking
-            manual_mode_start_us = esp_timer_get_time();
+            atomic_store(&manual_mode_start_us, esp_timer_get_time());
         } else {
             // Switching to AUTO - apply the last computed target
-            fan_set_speed_percent(auto_target_speed);
+            fan_set_speed_percent((uint8_t)atomic_load(&auto_target_speed));
         }
     } else if (mode == FAN_MODE_MANUAL) {
         // Already in manual mode but got another manual command - reset timeout
-        manual_mode_start_us = esp_timer_get_time();
+        atomic_store(&manual_mode_start_us, esp_timer_get_time());
     }
 }
 
 void fan_auto_update(float pm2_5)
 {
     // Only process in AUTO mode
-    if (current_mode != FAN_MODE_AUTO) {
+    if ((fan_mode_t)atomic_load(&current_mode) != FAN_MODE_AUTO) {
         return;
     }
 
@@ -440,28 +440,28 @@ void fan_auto_update(float pm2_5)
     }
 
     // Only update if target changed
-    if (target != auto_target_speed) {
+    if (target != (uint8_t)atomic_load(&auto_target_speed)) {
         ESP_LOGI(TAG, "AUTO mode: PM2.5=%.1f -> fan %d%%", pm2_5, target);
-        auto_target_speed = target;
+        atomic_store(&auto_target_speed, target);
         fan_set_speed_percent(target);
     }
 }
 
 uint8_t fan_get_target_speed(void)
 {
-    return auto_target_speed;
+    return (uint8_t)atomic_load(&auto_target_speed);
 }
 
 void fan_check_auto_timeout(void)
 {
     // Only check if we're in manual mode
-    if (current_mode != FAN_MODE_MANUAL) {
+    if ((fan_mode_t)atomic_load(&current_mode) != FAN_MODE_MANUAL) {
         return;
     }
 
     // Check if timeout has elapsed
     int64_t now = esp_timer_get_time();
-    int64_t elapsed_us = now - manual_mode_start_us;
+    int64_t elapsed_us = now - atomic_load(&manual_mode_start_us);
     int64_t timeout_us = (int64_t)MANUAL_TIMEOUT_SEC * 1000000;
 
     if (elapsed_us >= timeout_us) {
@@ -469,4 +469,19 @@ void fan_check_auto_timeout(void)
                  MANUAL_TIMEOUT_SEC / 3600);
         fan_set_mode(FAN_MODE_AUTO);
     }
+}
+
+int32_t fan_get_manual_remaining_sec(void)
+{
+    if ((fan_mode_t)atomic_load(&current_mode) != FAN_MODE_MANUAL) {
+        return -1;
+    }
+
+    int64_t now = esp_timer_get_time();
+    int64_t elapsed_us = now - atomic_load(&manual_mode_start_us);
+    int64_t timeout_us = (int64_t)MANUAL_TIMEOUT_SEC * 1000000;
+    int64_t remaining_us = timeout_us - elapsed_us;
+
+    if (remaining_us <= 0) return 0;
+    return (int32_t)(remaining_us / 1000000);
 }

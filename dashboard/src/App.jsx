@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { Settings } from 'lucide-react';
-import { getStatus, getHealth, getAllHistoryBinary, getArchiveQuery } from './api/esp32';
+import { getStatus, getHealth, getAllHistoryBinary, getArchiveQuery, getPmNumberArchiveQuery } from './api/esp32';
 import { useTemperatureUnit, TemperatureUnitProvider, convertTemp, tempUnit } from './utils/temperature';
 import AQICard, { calculateAQI } from './components/AQICard';
 import SecondaryMetric from './components/SecondaryMetric';
@@ -15,6 +15,7 @@ import PeakEventsCard from './components/PeakEventsCard';
 import PeriodComparisonCard, { TIER_DURATIONS } from './components/PeriodComparisonCard';
 import SystemInfo from './components/SystemInfo';
 import DataManagement from './components/DataManagement';
+import NumberConcentration from './components/NumberConcentration';
 import MetricModal from './components/MetricModal';
 
 const queryClient = new QueryClient({
@@ -90,11 +91,18 @@ function SettingsPanel({ health }) {
 }
 
 function ErrorsPanel({ health }) {
+  const ds = health?.sensor?.device_status;
+  const hasDeviceStatus = ds && (
+    ds.fan_speed_warning || ds.fan_cleaning || ds.gas_sensor_error ||
+    ds.rht_error || ds.laser_failure || ds.fan_failure
+  );
   const hasErrors = health && (
     health.sensor?.crc_errors > 0 ||
     health.sensor?.i2c_errors > 0 ||
+    health.sensor?.busy_skips?.count > 0 ||
     health.fan?.stall_events > 0 ||
-    health.wifi?.disconnect_count > 0
+    health.wifi?.disconnect_count > 0 ||
+    hasDeviceStatus
   );
 
   return (
@@ -110,7 +118,33 @@ function ErrorsPanel({ health }) {
         </div>
       )}
 
-      {health?.sensor && (health.sensor.crc_errors > 0 || health.sensor.i2c_errors > 0) && (
+      {hasDeviceStatus && (
+        <div className="mb-6 p-4 bg-mantle rounded-lg">
+          <h3 className="text-base font-medium text-text border-b border-surface-1 pb-2 mb-4">Device Status</h3>
+          <div className="flex flex-wrap gap-2">
+            {ds.fan_cleaning && (
+              <span className="px-3 py-1.5 text-sm font-medium rounded-lg bg-yellow text-base">Fan Cleaning</span>
+            )}
+            {ds.fan_speed_warning && (
+              <span className="px-3 py-1.5 text-sm font-medium rounded-lg bg-yellow text-base">Fan Speed Warning</span>
+            )}
+            {ds.gas_sensor_error && (
+              <span className="px-3 py-1.5 text-sm font-medium rounded-lg bg-red text-base">Gas Sensor Error</span>
+            )}
+            {ds.rht_error && (
+              <span className="px-3 py-1.5 text-sm font-medium rounded-lg bg-red text-base">RHT Error</span>
+            )}
+            {ds.laser_failure && (
+              <span className="px-3 py-1.5 text-sm font-medium rounded-lg bg-red text-base">Laser Failure</span>
+            )}
+            {ds.fan_failure && (
+              <span className="px-3 py-1.5 text-sm font-medium rounded-lg bg-red text-base">Fan Failure</span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {health?.sensor && (health.sensor.crc_errors > 0 || health.sensor.i2c_errors > 0 || health.sensor.busy_skips?.count > 0) && (
         <div className="mb-6 p-4 bg-mantle rounded-lg">
           <h3 className="text-base font-medium text-text border-b border-surface-1 pb-2 mb-4">Sensor Errors</h3>
           <div className="flex flex-wrap gap-6">
@@ -118,12 +152,23 @@ function ErrorsPanel({ health }) {
               <div className="flex flex-col gap-1">
                 <span className="text-xs text-overlay uppercase">CRC Errors</span>
                 <span className="text-2xl font-semibold text-red">{health.sensor.crc_errors}</span>
+                {health.sensor.last_crc_error && (
+                  <span className="text-xs text-overlay">
+                    Last: {health.sensor.last_crc_error.field} at read #{health.sensor.last_crc_error.read_number}
+                  </span>
+                )}
               </div>
             )}
             {health.sensor.i2c_errors > 0 && (
               <div className="flex flex-col gap-1">
                 <span className="text-xs text-overlay uppercase">I2C Errors</span>
                 <span className="text-2xl font-semibold text-red">{health.sensor.i2c_errors}</span>
+              </div>
+            )}
+            {health.sensor.busy_skips?.count > 0 && (
+              <div className="flex flex-col gap-1">
+                <span className="text-xs text-overlay uppercase">Busy Skips</span>
+                <span className="text-2xl font-semibold text-yellow">{health.sensor.busy_skips.count}</span>
               </div>
             )}
             {health.sensor.recoveries > 0 && (
@@ -284,7 +329,7 @@ function Dashboard() {
   const isArchiveTier = tierConfig?.source === 'archive';
 
   // Archive query for collector-backed tiers
-  const { data: archiveQueryData, isLoading: archiveLoading, error: archiveError } = useQuery({
+  const { data: archiveQueryDataRaw, isLoading: archiveLoading, error: archiveError } = useQuery({
     queryKey: ['archive', historyTier],
     queryFn: () => {
       const now = Math.floor(Date.now() / 1000);
@@ -295,6 +340,32 @@ function Dashboard() {
     refetchInterval: 30000,
     refetchOnWindowFocus: false,
   });
+
+  // PM number archive query (same time range as main archive)
+  const { data: pmNumberData } = useQuery({
+    queryKey: ['pmNumber', historyTier],
+    queryFn: () => {
+      const now = Math.floor(Date.now() / 1000);
+      const from = tierConfig.maxAge > 0 ? now - tierConfig.maxAge : 0;
+      return getPmNumberArchiveQuery(from, now, tierConfig.resolution);
+    },
+    enabled: isArchiveTier,
+    refetchInterval: 30000,
+    refetchOnWindowFocus: false,
+  });
+
+  // Merge PM number data into archive data by timestamp bucket
+  const archiveQueryData = useMemo(() => {
+    if (!archiveQueryDataRaw) return archiveQueryDataRaw;
+    if (!pmNumberData?.samples?.length) return archiveQueryDataRaw;
+
+    const ncByTs = new Map(pmNumberData.samples.map(s => [s.timestamp, s]));
+    const merged = archiveQueryDataRaw.samples.map(s => {
+      const nc = ncByTs.get(s.timestamp);
+      return nc ? { ...s, ...nc } : s;
+    });
+    return { ...archiveQueryDataRaw, samples: merged };
+  }, [archiveQueryDataRaw, pmNumberData]);
 
   // Separate query for PeriodComparisonCard: fetches 2x tier duration so splitPeriods() has a previous period
   const comparisonDuration = TIER_DURATIONS[historyTier] || 0;
@@ -478,6 +549,9 @@ function Dashboard() {
             <SecondaryMetric type="nox" value={sensor.nox_index} onClick={() => setSelectedMetric('nox')} />
             <PMDetails pm1_0={sensor.pm1_0} pm2_5={sensor.pm2_5} pm4_0={sensor.pm4_0} pm10={sensor.pm10} onMetricClick={setSelectedMetric} />
           </div>
+
+          {/* Particle Number Concentrations */}
+          <NumberConcentration pmNumber={sensor.pm_number} onMetricClick={setSelectedMetric} />
         </main>
       )}
 
@@ -494,6 +568,12 @@ function Dashboard() {
             selectedMetric === 'pm1' ? sensor.pm1_0 :
             selectedMetric === 'pm4' ? sensor.pm4_0 :
             selectedMetric === 'pm10' ? sensor.pm10 :
+            selectedMetric === 'nc_pm05' ? sensor.pm_number?.nc_pm0_5 :
+            selectedMetric === 'nc_pm10_nc' ? sensor.pm_number?.nc_pm1_0 :
+            selectedMetric === 'nc_pm25' ? sensor.pm_number?.nc_pm2_5 :
+            selectedMetric === 'nc_pm40' ? sensor.pm_number?.nc_pm4_0 :
+            selectedMetric === 'nc_pm100' ? sensor.pm_number?.nc_pm10 :
+            selectedMetric === 'typical_size' ? sensor.pm_number?.typical_size :
             null
           }
           onClose={() => setSelectedMetric(null)}

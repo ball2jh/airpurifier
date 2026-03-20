@@ -12,6 +12,12 @@ ESP32 environmental controller using ESP-IDF v5.5. Controls PWM fans and monitor
 - **WiFi:** 802.11 b/g/n (AP/STA/AP+STA)
 - **Bluetooth:** Classic + BLE
 
+### Air Purifier Build
+
+- **Build style:** Corsi-Rosenthal box
+- **Filters:** Filtrete 5" MPR 1900 MERV 13 (Premium Allergen, Bacteria and Virus, Deep Pleat), 2-pack
+- **Gas filtration:** None (mechanical/electrostatic only — no activated carbon)
+
 ## Build Commands
 
 ```bash

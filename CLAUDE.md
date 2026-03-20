@@ -19,4 +19,8 @@ ESP32 air quality monitor and fan controller system. Three components:
 - **IP:** 192.168.1.169 (mDNS: `airpurifier.local`)
 - **Board:** Hosyond ESP32S (ESP-WROOM-32, CP2102 USB-C)
 
+## SEN55 Documentation
+
+`docs/sen55/` contains Sensirion datasheets, app notes, and info notes converted to markdown. **Read the `.md` files, not the PDFs.** See `docs/sen55/CLAUDE.md` for an index.
+
 See component-level CLAUDE.md files for detailed instructions.

@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <inttypes.h>
 #include <math.h>
+#include "nvs.h"
 
 static const char *TAG = "api";
 
@@ -86,6 +87,18 @@ static esp_err_t options_handler(httpd_req_t *req)
     httpd_resp_set_hdr(req, "Access-Control-Max-Age", "86400");
     httpd_resp_send(req, NULL, 0);
     return ESP_OK;
+}
+
+/**
+ * @brief Create a cJSON root object, returning 500 on allocation failure
+ */
+static cJSON *create_json_or_500(httpd_req_t *req)
+{
+    cJSON *root = cJSON_CreateObject();
+    if (root == NULL) {
+        send_error_with_cors(req, HTTPD_500_INTERNAL_SERVER_ERROR, "JSON allocation failed");
+    }
+    return root;
 }
 
 // =============================================================================
@@ -317,7 +330,8 @@ done:
  */
 static esp_err_t status_handler(httpd_req_t *req)
 {
-    cJSON *root = cJSON_CreateObject();
+    cJSON *root = create_json_or_500(req);
+    if (root == NULL) return ESP_FAIL;
 
     // Sensor data - use cached last reading to avoid racing the main loop
     sen55_data_t air;
@@ -332,6 +346,18 @@ static esp_err_t status_handler(httpd_req_t *req)
         cJSON_AddNumberToObject(sensor, "voc_index", air.voc_index);
         cJSON_AddNumberToObject(sensor, "nox_index", air.nox_index);
         cJSON_AddBoolToObject(sensor, "valid", true);
+
+        // PM number concentrations (supplementary, updated every ~30s)
+        sen55_pm_detail_t pm_detail;
+        if (sen55_get_last_pm_details(&pm_detail)) {
+            cJSON *pm_num = cJSON_AddObjectToObject(sensor, "pm_number");
+            cJSON_AddNumberToObject(pm_num, "nc_pm0_5", safe_float(pm_detail.nc_pm0_5));
+            cJSON_AddNumberToObject(pm_num, "nc_pm1_0", safe_float(pm_detail.nc_pm1_0));
+            cJSON_AddNumberToObject(pm_num, "nc_pm2_5", safe_float(pm_detail.nc_pm2_5));
+            cJSON_AddNumberToObject(pm_num, "nc_pm4_0", safe_float(pm_detail.nc_pm4_0));
+            cJSON_AddNumberToObject(pm_num, "nc_pm10", safe_float(pm_detail.nc_pm10));
+            cJSON_AddNumberToObject(pm_num, "typical_size", safe_float(pm_detail.typical_size));
+        }
     } else {
         cJSON_AddBoolToObject(sensor, "valid", false);
     }
@@ -357,7 +383,8 @@ static esp_err_t status_handler(httpd_req_t *req)
  */
 static esp_err_t fan_get_handler(httpd_req_t *req)
 {
-    cJSON *root = cJSON_CreateObject();
+    cJSON *root = create_json_or_500(req);
+    if (root == NULL) return ESP_FAIL;
 
     cJSON_AddStringToObject(root, "mode", fan_get_mode() == FAN_MODE_AUTO ? "auto" : "manual");
     cJSON_AddNumberToObject(root, "speed_percent", fan_get_speed_percent());
@@ -369,6 +396,11 @@ static esp_err_t fan_get_handler(httpd_req_t *req)
     fan_get_health(&health);
     cJSON_AddNumberToObject(root, "stall_events", health.stall_events);
     cJSON_AddNumberToObject(root, "recovery_attempts", health.recovery_attempts);
+
+    int32_t remaining = fan_get_manual_remaining_sec();
+    if (remaining >= 0) {
+        cJSON_AddNumberToObject(root, "manual_timeout_remaining", remaining);
+    }
 
     esp_err_t ret = send_json_response(req, root);
     cJSON_Delete(root);
@@ -447,7 +479,8 @@ static esp_err_t fan_post_handler(httpd_req_t *req)
     cJSON_Delete(json);
 
     // Return new status
-    cJSON *root = cJSON_CreateObject();
+    cJSON *root = create_json_or_500(req);
+    if (root == NULL) return ESP_FAIL;
     cJSON_AddBoolToObject(root, "success", true);
     cJSON_AddStringToObject(root, "mode", fan_get_mode() == FAN_MODE_AUTO ? "auto" : "manual");
     cJSON_AddNumberToObject(root, "speed_percent", fan_get_speed_percent());
@@ -615,7 +648,8 @@ static esp_err_t history_handler(httpd_req_t *req)
     }
 
     // Build JSON response
-    cJSON *root = cJSON_CreateObject();
+    cJSON *root = create_json_or_500(req);
+    if (root == NULL) return ESP_FAIL;
     cJSON_AddStringToObject(root, "tier", tier_str);
     cJSON_AddNumberToObject(root, "resolution_seconds", tier_resolutions[tier]);
     cJSON_AddNumberToObject(root, "total_count", history_get_count(tier));
@@ -651,7 +685,8 @@ static esp_err_t history_handler(httpd_req_t *req)
  */
 static esp_err_t health_handler(httpd_req_t *req)
 {
-    cJSON *root = cJSON_CreateObject();
+    cJSON *root = create_json_or_500(req);
+    if (root == NULL) return ESP_FAIL;
 
     // SEN55 health
     sen55_health_t sen_health;
@@ -738,6 +773,19 @@ static esp_err_t health_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(history, "total_samples", hist_stats.total_samples_recorded);
     cJSON_AddNumberToObject(history, "memory_bytes", hist_stats.memory_used_bytes);
 
+    // Per-tier breakdown
+    static const char *tier_names[] = {"raw", "fine", "medium", "coarse", "daily", "archive"};
+    cJSON *tiers = cJSON_AddArrayToObject(history, "tiers");
+    for (int t = 0; t < TIER_COUNT; t++) {
+        cJSON *tier = cJSON_CreateObject();
+        cJSON_AddStringToObject(tier, "name", tier_names[t]);
+        cJSON_AddNumberToObject(tier, "resolution", hist_stats.tiers[t].resolution_s);
+        cJSON_AddNumberToObject(tier, "count", hist_stats.tiers[t].count);
+        cJSON_AddNumberToObject(tier, "capacity", hist_stats.tiers[t].capacity);
+        cJSON_AddNumberToObject(tier, "compactions", hist_stats.tiers[t].compactions);
+        cJSON_AddItemToArray(tiers, tier);
+    }
+
     esp_err_t ret = send_json_response(req, root);
     cJSON_Delete(root);
     return ret;
@@ -748,7 +796,8 @@ static esp_err_t health_handler(httpd_req_t *req)
  */
 static esp_err_t info_handler(httpd_req_t *req)
 {
-    cJSON *root = cJSON_CreateObject();
+    cJSON *root = create_json_or_500(req);
+    if (root == NULL) return ESP_FAIL;
 
     cJSON_AddStringToObject(root, "device", "ESP32 Environmental Controller");
     cJSON_AddStringToObject(root, "version", "1.0.0");
@@ -820,7 +869,8 @@ static esp_err_t info_handler(httpd_req_t *req)
  */
 static esp_err_t ota_get_handler(httpd_req_t *req)
 {
-    cJSON *root = cJSON_CreateObject();
+    cJSON *root = create_json_or_500(req);
+    if (root == NULL) return ESP_FAIL;
 
     ota_status_t status = ota_get_status();
 
@@ -885,7 +935,8 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
     esp_err_t err = ota_start_update(url);
     cJSON_Delete(json);
 
-    cJSON *root = cJSON_CreateObject();
+    cJSON *root = create_json_or_500(req);
+    if (root == NULL) return ESP_FAIL;
 
     if (err == ESP_OK) {
         cJSON_AddBoolToObject(root, "success", true);
@@ -1009,28 +1060,45 @@ static esp_err_t history_binary_handler(httpd_req_t *req)
 }
 
 /**
- * @brief POST /api/history/reset - Clear all history data and flash
+ * @brief POST /api/history/reset - Factory reset: clear history, NVS state, reboot
  */
 static esp_err_t history_reset_handler(httpd_req_t *req)
 {
-    ESP_LOGW(TAG, "History reset requested");
+    ESP_LOGW(TAG, "Factory reset requested");
 
+    // Clear history (RAM + flash)
     history_clear();
-    esp_err_t err = history_save();
+    esp_err_t hist_err = history_save();
 
-    cJSON *root = cJSON_CreateObject();
-    if (err == ESP_OK) {
-        cJSON_AddBoolToObject(root, "success", true);
-        cJSON_AddStringToObject(root, "message", "History cleared and flash erased");
+    // Clear SEN55 NVS state (VOC state, warm start, temp offset, last clean)
+    esp_err_t nvs_err = sen55_clear_nvs();
+
+    // Send response before rebooting
+    cJSON *root = create_json_or_500(req);
+    if (root == NULL) return ESP_FAIL;
+    bool success = (hist_err == ESP_OK && nvs_err == ESP_OK);
+    cJSON_AddBoolToObject(root, "success", success);
+    if (success) {
+        cJSON_AddStringToObject(root, "message", "Factory reset complete, rebooting");
     } else {
-        cJSON_AddBoolToObject(root, "success", false);
-        cJSON_AddStringToObject(root, "message", "History cleared (flash erase failed)");
-        cJSON_AddStringToObject(root, "warning", esp_err_to_name(err));
+        cJSON_AddStringToObject(root, "message", "Reset completed with warnings, rebooting");
+        if (hist_err != ESP_OK) {
+            cJSON_AddStringToObject(root, "history_error", esp_err_to_name(hist_err));
+        }
+        if (nvs_err != ESP_OK) {
+            cJSON_AddStringToObject(root, "nvs_error", esp_err_to_name(nvs_err));
+        }
     }
 
     esp_err_t ret = send_json_response(req, root);
     cJSON_Delete(root);
-    return ret;
+
+    // Reboot after short delay so the response reaches the client
+    ESP_LOGW(TAG, "Rebooting in 500ms...");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+
+    return ret;  // Unreachable, but keeps the compiler happy
 }
 
 /**
@@ -1042,7 +1110,8 @@ static esp_err_t history_save_handler(httpd_req_t *req)
 
     esp_err_t err = history_save();
 
-    cJSON *root = cJSON_CreateObject();
+    cJSON *root = create_json_or_500(req);
+    if (root == NULL) return ESP_FAIL;
     if (err == ESP_OK) {
         cJSON_AddBoolToObject(root, "success", true);
         cJSON_AddStringToObject(root, "message", "History saved to flash");
@@ -1065,7 +1134,8 @@ static esp_err_t history_save_handler(httpd_req_t *req)
  */
 static esp_err_t coredump_get_handler(httpd_req_t *req)
 {
-    cJSON *root = cJSON_CreateObject();
+    cJSON *root = create_json_or_500(req);
+    if (root == NULL) return ESP_FAIL;
 
 #if CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH && CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF
     esp_err_t err = esp_core_dump_image_check();
@@ -1193,7 +1263,8 @@ static esp_err_t coredump_clear_handler(httpd_req_t *req)
 {
     esp_err_t err = esp_core_dump_image_erase();
 
-    cJSON *root = cJSON_CreateObject();
+    cJSON *root = create_json_or_500(req);
+    if (root == NULL) return ESP_FAIL;
     cJSON_AddBoolToObject(root, "success", err == ESP_OK);
     if (err != ESP_OK) {
         cJSON_AddStringToObject(root, "error", esp_err_to_name(err));
@@ -1202,6 +1273,104 @@ static esp_err_t coredump_clear_handler(httpd_req_t *req)
     esp_err_t ret = send_json_response(req, root);
     cJSON_Delete(root);
     return ret;
+}
+
+/**
+ * @brief POST /api/sensor/clean - Trigger sensor fan cleaning
+ */
+static esp_err_t sensor_clean_handler(httpd_req_t *req)
+{
+    ESP_LOGI(TAG, "Sensor fan cleaning requested via API");
+
+    esp_err_t err = sen55_start_fan_cleaning();
+
+    cJSON *root = create_json_or_500(req);
+    if (root == NULL) return ESP_FAIL;
+    if (err == ESP_OK) {
+        cJSON_AddBoolToObject(root, "success", true);
+        cJSON_AddStringToObject(root, "message", "Fan cleaning started");
+    } else {
+        cJSON_AddBoolToObject(root, "success", false);
+        cJSON_AddStringToObject(root, "error", esp_err_to_name(err));
+    }
+
+    esp_err_t ret = send_json_response(req, root);
+    cJSON_Delete(root);
+    return ret;
+}
+
+/**
+ * @brief GET /api/sensor/temp-offset - Get temperature compensation offset
+ */
+static esp_err_t temp_offset_get_handler(httpd_req_t *req)
+{
+    int16_t offset_scaled = 0;
+    sen55_get_temp_offset(&offset_scaled);
+
+    cJSON *root = create_json_or_500(req);
+    if (root == NULL) return ESP_FAIL;
+    cJSON_AddNumberToObject(root, "offset", offset_scaled / 200.0);
+    cJSON_AddNumberToObject(root, "offset_raw", offset_scaled);
+
+    esp_err_t ret = send_json_response(req, root);
+    cJSON_Delete(root);
+    return ret;
+}
+
+/**
+ * @brief POST /api/sensor/temp-offset - Set temperature compensation offset
+ * Body: {"offset": -2.0}  (in degrees C)
+ */
+static esp_err_t temp_offset_post_handler(httpd_req_t *req)
+{
+    char buf[64];
+    int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (ret <= 0) {
+        send_error_with_cors(req, HTTPD_400_BAD_REQUEST, "No body");
+        return ESP_FAIL;
+    }
+    buf[ret] = '\0';
+
+    cJSON *json = cJSON_Parse(buf);
+    if (json == NULL) {
+        send_error_with_cors(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    cJSON *offset_item = cJSON_GetObjectItem(json, "offset");
+    if (!cJSON_IsNumber(offset_item)) {
+        cJSON_Delete(json);
+        send_error_with_cors(req, HTTPD_400_BAD_REQUEST, "Missing 'offset' field (degrees C)");
+        return ESP_FAIL;
+    }
+
+    double offset_c = offset_item->valuedouble;
+    cJSON_Delete(json);
+
+    // Sanity check: offset should be small
+    if (offset_c < -10.0 || offset_c > 10.0) {
+        send_error_with_cors(req, HTTPD_400_BAD_REQUEST, "Offset must be between -10.0 and 10.0 C");
+        return ESP_FAIL;
+    }
+
+    int16_t offset_scaled = (int16_t)(offset_c * 200.0);
+    ESP_LOGI(TAG, "Setting temp offset: %.2f C (raw: %d)", offset_c, offset_scaled);
+
+    esp_err_t err = sen55_set_temp_offset(offset_scaled);
+
+    cJSON *root = create_json_or_500(req);
+    if (root == NULL) return ESP_FAIL;
+    if (err == ESP_OK) {
+        cJSON_AddBoolToObject(root, "success", true);
+        cJSON_AddNumberToObject(root, "offset", offset_scaled / 200.0);
+    } else {
+        cJSON_AddBoolToObject(root, "success", false);
+        cJSON_AddStringToObject(root, "error", esp_err_to_name(err));
+    }
+
+    esp_err_t send_ret = send_json_response(req, root);
+    cJSON_Delete(root);
+    return send_ret;
 }
 
 // =============================================================================
@@ -1252,6 +1421,9 @@ esp_err_t api_server_start(void)
         {.uri = "/api/coredump", .method = HTTP_GET, .handler = coredump_get_handler},
         {.uri = "/api/coredump/raw", .method = HTTP_GET, .handler = coredump_raw_handler},
         {.uri = "/api/coredump/clear", .method = HTTP_POST, .handler = coredump_clear_handler},
+        {.uri = "/api/sensor/clean", .method = HTTP_POST, .handler = sensor_clean_handler},
+        {.uri = "/api/sensor/temp-offset", .method = HTTP_GET, .handler = temp_offset_get_handler},
+        {.uri = "/api/sensor/temp-offset", .method = HTTP_POST, .handler = temp_offset_post_handler},
     };
 
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
@@ -1274,6 +1446,9 @@ esp_err_t api_server_start(void)
     ESP_LOGI(TAG, "  GET  /api/info");
     ESP_LOGI(TAG, "  GET  /api/ota");
     ESP_LOGI(TAG, "  POST /api/ota");
+    ESP_LOGI(TAG, "  POST /api/sensor/clean");
+    ESP_LOGI(TAG, "  GET  /api/sensor/temp-offset");
+    ESP_LOGI(TAG, "  POST /api/sensor/temp-offset");
 
     return ESP_OK;
 }

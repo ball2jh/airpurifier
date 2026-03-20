@@ -7,6 +7,7 @@
 #include "esp_netif_sntp.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include <stdatomic.h>
 #include <string.h>
 #include <sys/time.h>
 
@@ -15,14 +16,14 @@ static const char *TAG = "time_sync";
 // Time is considered valid if year >= 2024
 #define TIME_VALID_YEAR 2024
 
-static volatile bool time_synced = false;
+static atomic_bool time_synced = false;
 
 /**
  * @brief Callback when time sync completes
  */
 static void time_sync_notification_cb(struct timeval *tv)
 {
-    time_synced = true;
+    atomic_store(&time_synced, true);
 
     // Log the synced time
     struct tm timeinfo;
@@ -59,7 +60,7 @@ esp_err_t time_sync_wait(uint32_t timeout_ms)
 {
     esp_err_t ret = esp_netif_sntp_sync_wait(pdMS_TO_TICKS(timeout_ms));
     if (ret == ESP_OK) {
-        time_synced = true;
+        atomic_store(&time_synced, true);
         ESP_LOGI(TAG, "Time sync completed");
     } else {
         ESP_LOGW(TAG, "Time sync timeout after %lu ms", (unsigned long)timeout_ms);
@@ -70,17 +71,17 @@ esp_err_t time_sync_wait(uint32_t timeout_ms)
 bool time_sync_is_synced(void)
 {
     // Double-check by verifying year is reasonable
-    if (time_synced) {
+    if (atomic_load(&time_synced)) {
         time_t now;
         struct tm timeinfo;
         time(&now);
         localtime_r(&now, &timeinfo);
 
         if (timeinfo.tm_year + 1900 < TIME_VALID_YEAR) {
-            time_synced = false;
+            atomic_store(&time_synced, false);
         }
     }
-    return time_synced;
+    return atomic_load(&time_synced);
 }
 
 time_t time_sync_get_timestamp(void)

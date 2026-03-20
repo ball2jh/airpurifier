@@ -79,7 +79,8 @@ static bool initialized = false;
 
 // Thread safety: protects all ring buffer state, accumulators, and stats
 static SemaphoreHandle_t history_mutex = NULL;
-#define HISTORY_MUTEX_TIMEOUT pdMS_TO_TICKS(100)
+#define HISTORY_MUTEX_TIMEOUT pdMS_TO_TICKS(2000)
+#define HISTORY_SAVE_MUTEX_TIMEOUT pdMS_TO_TICKS(5000)
 
 // Wide accumulator for averaging raw samples into fine tier
 // Uses wider types to prevent overflow (e.g., uint16_t fan_rpm * 30 samples > 65535)
@@ -574,7 +575,7 @@ void history_get_stats(history_stats_t *stats)
 
     stats->total_samples_recorded = total_samples;
     stats->total_compactions = total_compactions;
-    stats->uptime_seconds = total_samples * 2;  // Approximate
+    stats->uptime_seconds = (uint32_t)(esp_timer_get_time() / 1000000);
 
     stats->memory_used_bytes = sizeof(raw_buffer) + sizeof(fine_buffer) +
                                sizeof(medium_buffer) + sizeof(coarse_buffer) +
@@ -818,7 +819,7 @@ esp_err_t history_save(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (xSemaphoreTake(history_mutex, HISTORY_MUTEX_TIMEOUT) != pdTRUE) {
+    if (xSemaphoreTake(history_mutex, HISTORY_SAVE_MUTEX_TIMEOUT) != pdTRUE) {
         ESP_LOGW(TAG, "history_save: mutex timeout");
         return ESP_ERR_TIMEOUT;
     }

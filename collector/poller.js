@@ -1,11 +1,12 @@
 const { decodeBinaryHistory, TIER_NAMES, TIER_RESOLUTIONS } = require('./binary-decoder');
-const { insertSamples, getWatermark } = require('./db');
+const { insertSamples, getWatermark, insertPmNumberSample } = require('./db');
 
 const ESP32_HOST = process.env.ESP32_HOST || 'airpurifier.local';
 const POLL_INTERVAL = 30_000;
 
 let polling = false;
 let timer = null;
+let statusTimer = null;
 
 async function fetchHistory(since) {
   const url = since
@@ -66,6 +67,37 @@ async function pollOnce() {
   return inserted;
 }
 
+async function pollStatusOnce() {
+  const response = await fetch(`http://${ESP32_HOST}/api/status`);
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+  }
+  const status = await response.json();
+  const pmNumber = status?.sensor?.pm_number;
+  if (!pmNumber) return false;
+
+  const timestamp = status.timestamp || Math.floor(Date.now() / 1000);
+  insertPmNumberSample(timestamp, pmNumber);
+  return true;
+}
+
+async function statusPollLoop() {
+  if (!polling) return;
+
+  try {
+    const ok = await pollStatusOnce();
+    if (ok) {
+      console.log('[poller] Collected PM number sample from /api/status');
+    }
+  } catch (err) {
+    console.warn(`[poller] Status fetch error (will retry): ${err.message}`);
+  }
+
+  if (polling) {
+    statusTimer = setTimeout(statusPollLoop, POLL_INTERVAL);
+  }
+}
+
 async function pollLoop() {
   if (!polling) return;
 
@@ -95,6 +127,9 @@ async function start() {
   }
 
   timer = setTimeout(pollLoop, POLL_INTERVAL);
+
+  // Start status polling for PM number data (offset by 15s to spread load)
+  statusTimer = setTimeout(statusPollLoop, 15000);
 }
 
 function stop() {
@@ -102,6 +137,10 @@ function stop() {
   if (timer) {
     clearTimeout(timer);
     timer = null;
+  }
+  if (statusTimer) {
+    clearTimeout(statusTimer);
+    statusTimer = null;
   }
   console.log('[poller] Stopped');
 }

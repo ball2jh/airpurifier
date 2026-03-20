@@ -12,7 +12,7 @@ import {
   ReferenceDot,
   ReferenceLine,
 } from 'recharts';
-import { getStatus, setFan, setFanMode } from '../api/esp32';
+import { getStatus, getFan, setFan, setFanMode } from '../api/esp32';
 import { Card } from '@/components/ui/card';
 import { useWindowWidth } from './HistoryChart';
 
@@ -306,6 +306,13 @@ export default function FanControl() {
     refetchOnWindowFocus: false,
   });
 
+  const { data: fanDetails } = useQuery({
+    queryKey: ['fan'],
+    queryFn: getFan,
+    refetchInterval: burstMode ? 1000 : 5000,
+    refetchOnWindowFocus: false,
+  });
+
   const startBurst = () => {
     setBurstMode(true);
     if (burstTimeout.current) clearTimeout(burstTimeout.current);
@@ -515,6 +522,12 @@ export default function FanControl() {
             Auto
           </button>
         </div>
+
+        {!isAuto && fanDetails?.manual_timeout_remaining != null && fanDetails.manual_timeout_remaining > 0 && (
+          <p className="text-center text-sm text-overlay mb-4">
+            Returns to auto in {Math.floor(fanDetails.manual_timeout_remaining / 3600)}h {Math.floor((fanDetails.manual_timeout_remaining % 3600) / 60)}m
+          </p>
+        )}
 
         <div className="flex flex-col items-center">
           {/* Circular Gauge */}

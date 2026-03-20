@@ -1,8 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
-import { Cpu, Wifi, HardDrive, Clock, Globe, Activity, Radio, RotateCcw, AlertTriangle, BarChart3 } from 'lucide-react';
+import { Cpu, Wifi, HardDrive, Clock, Globe, Activity, Radio, RotateCcw, AlertTriangle, BarChart3, Tag, Layers } from 'lucide-react';
 import { getInfo, getOta } from '../api/esp32';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Progress } from '@/components/ui/progress';
 
 function InfoItem({ icon: Icon, label, value }) {
   return (
@@ -43,10 +44,20 @@ export default function SystemInfo({ health }) {
           <>
             <InfoItem icon={Cpu} label="Device" value={info.device} />
             <InfoItem icon={Activity} label="Version" value={info.version} />
+            {info.sensor && (
+              <>
+                <InfoItem icon={Cpu} label="Sensor Model" value={info.sensor.product} />
+                <InfoItem icon={Tag} label="Serial Number" value={info.sensor.serial} />
+                <InfoItem icon={Layers} label="Sensor FW" value={`v${info.sensor.firmware}`} />
+              </>
+            )}
             <InfoItem icon={Clock} label="Uptime" value={info.uptime} />
             <InfoItem icon={Radio} label="NTP Time" value={info.time_synced ? info.current_time : 'Not synced'} />
             <InfoItem icon={Globe} label="IP Address" value={info.ip} />
             <InfoItem icon={HardDrive} label="Free Heap" value={`${formatBytes(info.free_heap)} (min: ${formatBytes(info.min_free_heap)})`} />
+            {health?.history && (
+              <InfoItem icon={BarChart3} label="History" value={`${health.history.total_samples} samples (${formatBytes(health.history.memory_bytes)})`} />
+            )}
           </>
         )}
         {info && (
@@ -68,9 +79,33 @@ export default function SystemInfo({ health }) {
           />
         )}
         {ota && (
-          <InfoItem icon={HardDrive} label="OTA Partition" value={ota.partition} />
+          <>
+            <InfoItem icon={HardDrive} label="OTA Partition" value={ota.partition} />
+            {ota.state !== 'idle' && (
+              <InfoItem
+                icon={HardDrive}
+                label="OTA Status"
+                value={ota.state === 'downloading' ? 'Downloading' : ota.state === 'verifying' ? 'Verifying' : ota.state === 'rebooting' ? 'Rebooting' : ota.state === 'failed' ? 'Failed' : ota.state}
+              />
+            )}
+          </>
         )}
       </div>
+
+      {ota && ota.state !== 'idle' && (
+        <div className="mb-6 p-4 bg-mantle rounded-lg">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-medium text-text">
+              OTA Update: {ota.state === 'downloading' ? 'Downloading' : ota.state === 'verifying' ? 'Verifying' : ota.state === 'rebooting' ? 'Rebooting' : 'Failed'}
+            </span>
+            <span className="text-sm text-overlay">{ota.progress}%</span>
+          </div>
+          <Progress value={ota.progress} indicatorClassName={ota.state === 'failed' ? 'bg-red' : 'bg-blue'} />
+          {ota.error && (
+            <p className="mt-2 text-xs text-red">{ota.error}</p>
+          )}
+        </div>
+      )}
 
       {/* Health Status */}
       {health && (
@@ -78,11 +113,27 @@ export default function SystemInfo({ health }) {
           <h4 className="text-sm font-medium text-subtext uppercase tracking-wider mb-3">Health Status</h4>
 
           <div className="flex flex-wrap gap-2">
-            {health.sensor && (
-              <Badge variant={health.sensor.healthy ? 'good' : 'poor'}>
-                Sensor {health.sensor.healthy ? 'OK' : 'Error'}
-              </Badge>
-            )}
+            {health.sensor && (() => {
+              const ds = health.sensor.device_status;
+              const hasFlags = ds && (ds.fan_cleaning || ds.fan_speed_warning || ds.gas_sensor_error || ds.rht_error || ds.laser_failure || ds.fan_failure);
+              if (hasFlags) {
+                return (
+                  <>
+                    {ds.fan_cleaning && <Badge variant="moderate">Fan Cleaning</Badge>}
+                    {ds.fan_speed_warning && <Badge variant="moderate">Fan Speed Warning</Badge>}
+                    {ds.gas_sensor_error && <Badge variant="poor">Gas Sensor Error</Badge>}
+                    {ds.rht_error && <Badge variant="poor">RHT Error</Badge>}
+                    {ds.laser_failure && <Badge variant="poor">Laser Failure</Badge>}
+                    {ds.fan_failure && <Badge variant="poor">Fan Failure</Badge>}
+                  </>
+                );
+              }
+              return (
+                <Badge variant={health.sensor.healthy ? 'good' : 'poor'}>
+                  Sensor {health.sensor.healthy ? 'OK' : 'Error'}
+                </Badge>
+              );
+            })()}
             {health.fan && (
               <Badge variant={health.fan.healthy ? 'good' : 'poor'}>
                 Fan {health.fan.healthy ? 'OK' : 'Error'}
@@ -97,6 +148,9 @@ export default function SystemInfo({ health }) {
               <Badge variant={info.time_synced ? 'good' : 'moderate'}>
                 NTP {info.time_synced ? 'Synced' : 'Pending'}
               </Badge>
+            )}
+            {ota?.pending_validation && (
+              <Badge variant="moderate">OTA Pending Validation</Badge>
             )}
           </div>
         </div>

@@ -48,6 +48,17 @@ static const char *TAG = "sen55";
 #define CMD_RESET           0xD304
 #define CMD_START_FAN_CLEAN 0x5607
 #define CMD_VOC_STATE       0x6181  // Same address for get (read) and set (write)
+#define CMD_CLEAR_STATUS    0xD210
+#define CMD_RHT_ACCEL       0x60F7
+#define CMD_PRODUCT_NAME    0xD014
+#define CMD_SERIAL_NUMBER   0xD033
+#define CMD_FW_VERSION      0xD100
+#define CMD_AUTO_CLEAN_INTERVAL 0x8004
+#define CMD_WARM_START      0x60C6
+#define CMD_VOC_TUNING      0x60D0
+#define CMD_NOX_TUNING      0x60E1
+#define CMD_TEMP_COMP       0x60B2
+#define CMD_READ_PM_DETAILS 0x0413
 
 // CRC-8 polynomial (x^8 + x^5 + x^4 + 1)
 #define CRC8_POLYNOMIAL     0x31
@@ -62,6 +73,8 @@ static const char *TAG = "sen55";
 #define NVS_NAMESPACE       "sen55"
 #define NVS_KEY_VOC_STATE   "voc_state"
 #define NVS_KEY_LAST_CLEAN  "last_clean"
+#define NVS_KEY_WARM_START  "warm_start"
+#define NVS_KEY_TEMP_OFFSET "temp_off"
 
 // =============================================================================
 // State
@@ -71,15 +84,42 @@ static i2c_master_bus_handle_t bus_handle = NULL;
 static i2c_master_dev_handle_t dev_handle = NULL;
 static bool initialized = false;
 
+// I2C bus mutex — serializes all I2C transactions across tasks
+// Recursive because sen55_read() calls sen55_data_ready() internally
+static SemaphoreHandle_t i2c_mutex = NULL;
+#define I2C_MUTEX_TIMEOUT pdMS_TO_TICKS(5000)
+
 // Health tracking
 static sen55_health_t health = {0};
 static portMUX_TYPE health_spinlock = portMUX_INITIALIZER_UNLOCKED;
 static uint32_t consecutive_failures = 0;
 
+// Sensor identity (read once at init)
+static sen55_identity_t identity = {0};
+
 // Last successful reading cache (for API access without consuming sensor data)
 static sen55_data_t last_reading = {0};
 static bool has_valid_reading = false;
 static SemaphoreHandle_t reading_mutex = NULL;
+
+// PM number concentration cache (updated on slower cadence ~30s)
+static sen55_pm_detail_t last_pm_details = {0};
+
+// =============================================================================
+// I2C Mutex Helpers
+// =============================================================================
+
+static bool i2c_lock(void)
+{
+    if (i2c_mutex == NULL) return true;  // Before mutex created (during init)
+    return xSemaphoreTakeRecursive(i2c_mutex, I2C_MUTEX_TIMEOUT) == pdTRUE;
+}
+
+static void i2c_unlock(void)
+{
+    if (i2c_mutex == NULL) return;
+    xSemaphoreGiveRecursive(i2c_mutex);
+}
 
 // =============================================================================
 // CRC-8 Calculation
@@ -225,7 +265,7 @@ static esp_err_t sen55_send_cmd_internal(uint16_t cmd)
 static esp_err_t sen55_read_data_internal(uint8_t *data, size_t words)
 {
     size_t total_bytes = words * 3;  // Each word: 2 data bytes + 1 CRC
-    uint8_t raw[24];  // Max 8 words = 24 bytes
+    uint8_t raw[48];  // Max 16 words = 48 bytes (product name/serial are 16 words)
 
     if (total_bytes > sizeof(raw)) {
         return ESP_ERR_INVALID_SIZE;
@@ -296,7 +336,7 @@ static esp_err_t sen55_read_data_internal(uint8_t *data, size_t words)
 static esp_err_t sen55_write_data_internal(uint16_t cmd, const uint8_t *data, size_t words)
 {
     size_t total = 2 + words * 3;
-    uint8_t buf[20];  // Max: 2 cmd + 4 words * 3 = 14
+    uint8_t buf[20];  // Max: 2 cmd + 6 words * 3 = 20 (tuning commands)
     if (total > sizeof(buf)) {
         return ESP_ERR_INVALID_SIZE;
     }
@@ -361,6 +401,240 @@ static void restore_voc_state(void)
     }
 }
 
+/**
+ * @brief Restore warm start parameter from NVS
+ *
+ * Writes the saved opaque warm start value (0 = cold, 65535 = warm) back to
+ * the sensor so the VOC algorithm can compensate for the thermal transient
+ * during warm-up. Must be called in idle mode (before start measurement).
+ */
+static void restore_warm_start(void)
+{
+    nvs_handle_t nvs;
+    esp_err_t ret = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs);
+    if (ret != ESP_OK) {
+        return;
+    }
+
+    uint16_t warm_start = 0;
+    ret = nvs_get_u16(nvs, NVS_KEY_WARM_START, &warm_start);
+    nvs_close(nvs);
+
+    if (ret != ESP_OK) {
+        return;
+    }
+
+    uint8_t data[2] = {(uint8_t)(warm_start >> 8), (uint8_t)(warm_start & 0xFF)};
+    ret = sen55_write_data_internal(CMD_WARM_START, data, 1);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "Warm start parameter restored (%u)", warm_start);
+        vTaskDelay(pdMS_TO_TICKS(20));
+    } else {
+        ESP_LOGW(TAG, "Warm start restore failed: %s", esp_err_to_name(ret));
+    }
+}
+
+// =============================================================================
+// Sensor Configuration (called during init/recover, in idle mode)
+// =============================================================================
+
+/**
+ * @brief Read sensor identity (product name, serial number, firmware version)
+ *
+ * Called once during init (not during recover). Results cached in static.
+ */
+static void read_sensor_identity(void)
+{
+    // Read product name (up to 16 words = 32 ASCII chars)
+    esp_err_t ret = sen55_send_cmd_internal(CMD_PRODUCT_NAME);
+    if (ret != ESP_OK) goto fail;
+    vTaskDelay(pdMS_TO_TICKS(20));
+
+    uint8_t name_data[32];
+    ret = sen55_read_data_internal(name_data, 16);
+    if (ret != ESP_OK) goto fail;
+
+    // Copy until null terminator or end of buffer
+    size_t name_len = 0;
+    for (size_t i = 0; i < sizeof(name_data) && name_data[i] != '\0'; i++) {
+        identity.product_name[name_len++] = (char)name_data[i];
+    }
+    identity.product_name[name_len] = '\0';
+
+    // Read serial number (up to 16 words = 32 ASCII chars)
+    ret = sen55_send_cmd_internal(CMD_SERIAL_NUMBER);
+    if (ret != ESP_OK) goto fail;
+    vTaskDelay(pdMS_TO_TICKS(20));
+
+    uint8_t serial_data[32];
+    ret = sen55_read_data_internal(serial_data, 16);
+    if (ret != ESP_OK) goto fail;
+
+    size_t serial_len = 0;
+    for (size_t i = 0; i < sizeof(serial_data) && serial_data[i] != '\0'; i++) {
+        identity.serial_number[serial_len++] = (char)serial_data[i];
+    }
+    identity.serial_number[serial_len] = '\0';
+
+    // Read firmware version (1 word: major byte, minor byte)
+    ret = sen55_send_cmd_internal(CMD_FW_VERSION);
+    if (ret != ESP_OK) goto fail;
+    vTaskDelay(pdMS_TO_TICKS(20));
+
+    uint8_t fw_data[2];
+    ret = sen55_read_data_internal(fw_data, 1);
+    if (ret != ESP_OK) goto fail;
+
+    identity.firmware_major = fw_data[0];
+    identity.firmware_minor = fw_data[1];
+    identity.valid = true;
+
+    ESP_LOGI(TAG, "Sensor: %s (S/N: %s, FW: %u.%u)",
+             identity.product_name, identity.serial_number,
+             identity.firmware_major, identity.firmware_minor);
+    return;
+
+fail:
+    ESP_LOGW(TAG, "Failed to read sensor identity: %s", esp_err_to_name(ret));
+}
+
+/**
+ * @brief Set RH/T acceleration mode to Low for stationary operation
+ *
+ * Per datasheet: "Low acceleration is advised for stationary devices
+ * not subject to large variations in temperature."
+ * Must be called in idle mode (before start measurement).
+ */
+static void configure_rht_acceleration(void)
+{
+    // Mode 0 = Low acceleration (stationary)
+    uint8_t data[2] = {0x00, 0x00};
+    esp_err_t ret = sen55_write_data_internal(CMD_RHT_ACCEL, data, 1);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "RH/T acceleration mode set to Low (stationary)");
+        vTaskDelay(pdMS_TO_TICKS(20));
+    } else {
+        ESP_LOGW(TAG, "Failed to set RH/T acceleration: %s", esp_err_to_name(ret));
+    }
+}
+
+/**
+ * @brief Set VOC algorithm tuning parameters for indoor air quality
+ *
+ * Per Engineering Guidelines: "In the case of indoor air quality monitoring,
+ * a time of 72h works optimal" for Learning Time Gain Hours.
+ * Must be called in idle mode (before start measurement).
+ */
+static void configure_voc_tuning(void)
+{
+    // 6 words: Index Offset, Learning Time Offset Hours, Learning Time Gain Hours,
+    //          Gating Max Duration Minutes, Std Dev Initial, Gain Factor
+    uint8_t data[12] = {
+        0x00, 0x64,  // Index Offset: 100 (default)
+        0x00, 0x48,  // Learning Time Offset Hours: 72
+        0x00, 0x48,  // Learning Time Gain Hours: 72
+        0x00, 0xB4,  // Gating Max Duration Minutes: 180 (default)
+        0x00, 0x32,  // Std Dev Initial: 50 (default)
+        0x00, 0xE6,  // Gain Factor: 230 (default)
+    };
+    esp_err_t ret = sen55_write_data_internal(CMD_VOC_TUNING, data, 6);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "VOC algorithm tuning configured (72h learning gain for indoor AQ)");
+        vTaskDelay(pdMS_TO_TICKS(20));
+    } else {
+        ESP_LOGW(TAG, "Failed to set VOC tuning: %s", esp_err_to_name(ret));
+    }
+}
+
+/**
+ * @brief Set NOx algorithm tuning parameters for indoor air quality
+ *
+ * Per Engineering Guidelines: configure both VOC and NOx tuning.
+ * Default NOx uses 12h learning; we set 72h for indoor AQ monitoring.
+ * Must be called in idle mode (before start measurement).
+ */
+static void configure_nox_tuning(void)
+{
+    // 6 words (2 mandatory constants, 4 tunable) — all must be sent per datasheet §6.1.9
+    uint8_t data[12] = {
+        0x00, 0x01,  // Index Offset: 1 (default for NOx)
+        0x00, 0x48,  // Learning Time Offset Hours: 72
+        0x00, 0x0C,  // Learning Time Gain Hours: 12 (mandatory constant)
+        0x02, 0xD0,  // Gating Max Duration Minutes: 720 (default)
+        0x00, 0x32,  // Std Initial: 50 (mandatory constant)
+        0x00, 0xE6,  // Gain Factor: 230 (default)
+    };
+    esp_err_t ret = sen55_write_data_internal(CMD_NOX_TUNING, data, 6);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "NOx algorithm tuning configured (72h learning for indoor AQ)");
+        vTaskDelay(pdMS_TO_TICKS(20));
+    } else {
+        ESP_LOGW(TAG, "Failed to set NOx tuning: %s", esp_err_to_name(ret));
+    }
+}
+
+/**
+ * @brief Configure temperature compensation offset from NVS
+ *
+ * Compensates for ESP32 self-heating bias. Offset is persisted in NVS
+ * via sen55_set_temp_offset() and applied here during init/recover.
+ * Must be called in idle mode (before start measurement).
+ */
+static void configure_temp_compensation(void)
+{
+    nvs_handle_t nvs;
+    esp_err_t ret = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs);
+    if (ret != ESP_OK) {
+        ESP_LOGI(TAG, "No temperature compensation configured");
+        return;
+    }
+
+    int16_t offset = 0;
+    ret = nvs_get_i16(nvs, NVS_KEY_TEMP_OFFSET, &offset);
+    nvs_close(nvs);
+
+    if (ret != ESP_OK) {
+        ESP_LOGI(TAG, "No temperature compensation configured");
+        return;
+    }
+
+    // Command 0x60B2: 3 words — offset (scaled 200), slope (scaled 10000), time constant (seconds)
+    // Only set offset; slope=0 and time_constant=0 use sensor defaults
+    uint8_t data[6] = {
+        (uint8_t)(offset >> 8), (uint8_t)(offset & 0xFF),  // Offset (scaled by 200)
+        0x00, 0x00,  // Slope: 0 (default)
+        0x00, 0x00,  // Time constant: 0 (default)
+    };
+    ret = sen55_write_data_internal(CMD_TEMP_COMP, data, 3);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "Temperature compensation: %.2f C offset", offset / 200.0f);
+        vTaskDelay(pdMS_TO_TICKS(20));
+    } else {
+        ESP_LOGW(TAG, "Failed to set temp compensation: %s", esp_err_to_name(ret));
+    }
+}
+
+/**
+ * @brief Disable sensor's internal auto-clean timer
+ *
+ * The sensor has a volatile internal auto-clean timer (default 604800s) that
+ * runs in parallel with the firmware's NVS-based cleaning logic. Disable it
+ * so sen55_check_fan_cleaning() is the sole cleaning authority.
+ * Must be called in idle mode (before start measurement).
+ */
+static void disable_internal_auto_clean(void)
+{
+    // Interval 0 = disabled
+    uint8_t data[4] = {0x00, 0x00, 0x00, 0x00};
+    esp_err_t ret = sen55_write_data_internal(CMD_AUTO_CLEAN_INTERVAL, data, 2);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "Internal auto-clean timer disabled");
+        vTaskDelay(pdMS_TO_TICKS(20));
+    } else {
+        ESP_LOGW(TAG, "Failed to disable auto-clean timer: %s", esp_err_to_name(ret));
+    }
+}
+
 // =============================================================================
 // I2C Bus Initialization
 // =============================================================================
@@ -418,12 +692,28 @@ esp_err_t sen55_init(void)
 
     ESP_LOGI(TAG, "Initializing SEN55 (I2C GPIO %d/%d)", I2C_SDA_GPIO, I2C_SCL_GPIO);
 
+    // Create I2C mutex before any I2C operations (recursive: sen55_read calls sen55_data_ready)
+    if (i2c_mutex == NULL) {
+        i2c_mutex = xSemaphoreCreateRecursiveMutex();
+        if (i2c_mutex == NULL) {
+            ESP_LOGE(TAG, "Failed to create I2C mutex");
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
     ret = sen55_init_bus();
     if (ret != ESP_OK) {
         return ret;
     }
 
-    // Restore VOC algorithm state from NVS (must be in idle mode, before start)
+    // All configuration must happen in idle mode (before start measurement)
+    read_sensor_identity();
+    configure_rht_acceleration();
+    disable_internal_auto_clean();
+    configure_voc_tuning();
+    configure_nox_tuning();
+    configure_temp_compensation();
+    restore_warm_start();
     restore_voc_state();
 
     // Start measurement mode
@@ -484,8 +774,14 @@ bool sen55_data_ready(void)
         return false;
     }
 
+    if (!i2c_lock()) {
+        ESP_LOGW(TAG, "data_ready: I2C mutex timeout");
+        return false;
+    }
+
     esp_err_t ret = sen55_send_cmd_internal(CMD_READ_DATA_READY);
     if (ret != ESP_OK) {
+        i2c_unlock();
         return false;
     }
 
@@ -499,17 +795,20 @@ bool sen55_data_ready(void)
             health.last_crc_error.data[0] == 0xFF &&
             health.last_crc_error.data[1] == 0xFF &&
             health.last_crc_error.recv_crc == 0xFF) {
-            // Undo the CRC error count - sensor was just busy
+            taskENTER_CRITICAL(&health_spinlock);
             if (health.crc_errors > 0) health.crc_errors--;
-            // Track as busy event
             health.busy_events.count++;
             health.busy_events.last_read_number = health.total_reads;
             health.busy_events.last_uptime_ms = esp_timer_get_time() / 1000;
+            taskEXIT_CRITICAL(&health_spinlock);
         }
+        i2c_unlock();
         return false;
     }
 
-    return (data[1] & 0x01) != 0;
+    bool ready = (data[1] & 0x01) != 0;
+    i2c_unlock();
+    return ready;
 }
 
 esp_err_t sen55_read(sen55_data_t *data)
@@ -522,13 +821,21 @@ esp_err_t sen55_read(sen55_data_t *data)
         return ESP_ERR_INVALID_STATE;
     }
 
+    if (!i2c_lock()) {
+        ESP_LOGW(TAG, "read: I2C mutex timeout");
+        return ESP_ERR_TIMEOUT;
+    }
+
     // Check if new data is ready before reading (per Sensirion official driver)
     // This prevents the 0xFFFF "not ready" responses
     if (!sen55_data_ready()) {
+        i2c_unlock();
         return ESP_ERR_NOT_FOUND;  // No new data - normal, will try again next cycle
     }
 
+    taskENTER_CRITICAL(&health_spinlock);
     health.total_reads++;
+    taskEXIT_CRITICAL(&health_spinlock);
 
     // Send read command
     esp_err_t ret = sen55_send_cmd_internal(CMD_READ_VALUES);
@@ -554,14 +861,15 @@ esp_err_t sen55_read(sen55_data_t *data)
             health.last_crc_error.recv_crc == 0xFF) {
 
             // Track for diagnostics but don't treat as error
+            taskENTER_CRITICAL(&health_spinlock);
             health.busy_events.count++;
             health.busy_events.last_read_number = health.total_reads;
             health.busy_events.last_uptime_ms = esp_timer_get_time() / 1000;
-
-            // Undo the CRC error count - this isn't corruption, just sensor busy
             if (health.crc_errors > 0) health.crc_errors--;
+            taskEXIT_CRITICAL(&health_spinlock);
 
             ESP_LOGD(TAG, "Sensor busy (0xFFFF), skipping this reading");
+            i2c_unlock();
             return ESP_ERR_NOT_FOUND;  // Treat like "no data ready"
         }
 
@@ -572,8 +880,12 @@ esp_err_t sen55_read(sen55_data_t *data)
 
     // Success
     consecutive_failures = 0;
+    taskENTER_CRITICAL(&health_spinlock);
     health.successful_reads++;
     health.is_healthy = true;
+    taskEXIT_CRITICAL(&health_spinlock);
+
+    i2c_unlock();
 
     // Convert raw data to physical values
     // PM values are uint16_t, others are int16_t per Sensirion datasheet
@@ -608,7 +920,10 @@ esp_err_t sen55_read(sen55_data_t *data)
     return ESP_OK;
 
 handle_failure:
+    taskENTER_CRITICAL(&health_spinlock);
     health.is_healthy = false;
+    taskEXIT_CRITICAL(&health_spinlock);
+    i2c_unlock();
 
     // Auto-recovery after too many consecutive failures
     if (consecutive_failures >= MAX_CONSECUTIVE_FAILURES) {
@@ -622,6 +937,11 @@ handle_failure:
 
 esp_err_t sen55_recover(void)
 {
+    if (!i2c_lock()) {
+        ESP_LOGW(TAG, "recover: I2C mutex timeout");
+        return ESP_ERR_TIMEOUT;
+    }
+
     ESP_LOGW(TAG, "Starting sensor recovery sequence");
     health.reinit_count++;
 
@@ -632,6 +952,7 @@ esp_err_t sen55_recover(void)
     esp_err_t ret = sen55_init_bus();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to re-init I2C bus: %s", esp_err_to_name(ret));
+        i2c_unlock();
         return ret;
     }
 
@@ -640,10 +961,20 @@ esp_err_t sen55_recover(void)
     sen55_send_cmd_internal(CMD_RESET);
     vTaskDelay(pdMS_TO_TICKS(200));
 
-    // Step 4: Re-start measurement
+    // Step 4: Reconfigure in idle mode (before start measurement)
+    configure_rht_acceleration();
+    disable_internal_auto_clean();
+    configure_voc_tuning();
+    configure_nox_tuning();
+    configure_temp_compensation();
+    restore_warm_start();
+    restore_voc_state();
+
+    // Step 5: Re-start measurement
     ret = sen55_start();
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Failed to restart measurement: %s", esp_err_to_name(ret));
+        i2c_unlock();
         return ret;
     }
 
@@ -658,6 +989,7 @@ esp_err_t sen55_recover(void)
     consecutive_failures = 0;
     health.is_healthy = true;
 
+    i2c_unlock();
     ESP_LOGI(TAG, "Sensor recovery completed successfully");
     return ESP_OK;
 }
@@ -705,10 +1037,16 @@ esp_err_t sen55_read_device_status(sen55_device_status_t *status)
         return ESP_ERR_INVALID_STATE;
     }
 
+    if (!i2c_lock()) {
+        ESP_LOGW(TAG, "read_device_status: I2C mutex timeout");
+        return ESP_ERR_TIMEOUT;
+    }
+
     memset(status, 0, sizeof(*status));
 
     esp_err_t ret = sen55_send_cmd_internal(CMD_DEVICE_STATUS);
     if (ret != ESP_OK) {
+        i2c_unlock();
         return ret;
     }
 
@@ -718,6 +1056,7 @@ esp_err_t sen55_read_device_status(sen55_device_status_t *status)
     uint8_t data[4];
     ret = sen55_read_data_internal(data, 2);
     if (ret != ESP_OK) {
+        i2c_unlock();
         return ret;
     }
 
@@ -756,6 +1095,11 @@ esp_err_t sen55_read_device_status(sen55_device_status_t *status)
         ESP_LOGI(TAG, "Device status: Fan cleaning in progress");
     }
 
+    // Clear sticky status flags so next read reflects only new errors
+    sen55_send_cmd_internal(CMD_CLEAR_STATUS);
+    vTaskDelay(pdMS_TO_TICKS(20));
+
+    i2c_unlock();
     return ESP_OK;
 }
 
@@ -765,8 +1109,15 @@ esp_err_t sen55_start_fan_cleaning(void)
         return ESP_ERR_INVALID_STATE;
     }
 
+    if (!i2c_lock()) {
+        ESP_LOGW(TAG, "start_fan_cleaning: I2C mutex timeout");
+        return ESP_ERR_TIMEOUT;
+    }
+
     ESP_LOGI(TAG, "Starting manual fan cleaning cycle (~10s)");
-    return sen55_send_cmd_internal(CMD_START_FAN_CLEAN);
+    esp_err_t ret = sen55_send_cmd_internal(CMD_START_FAN_CLEAN);
+    i2c_unlock();
+    return ret;
 }
 
 bool sen55_check_fan_cleaning(uint32_t current_unix_time)
@@ -813,11 +1164,15 @@ esp_err_t sen55_save_voc_state(void)
         return ESP_OK;
     }
 
+    if (!i2c_lock()) {
+        ESP_LOGW(TAG, "save_voc_state: I2C mutex timeout");
+        return ESP_ERR_TIMEOUT;
+    }
+
     // Read VOC algorithm state (must be in measurement mode)
-    // Note: if called from non-main task (e.g., OTA), a concurrent sen55_read()
-    // may cause a transient I2C error on either side — both handle this gracefully
     esp_err_t ret = sen55_send_cmd_internal(CMD_VOC_STATE);
     if (ret != ESP_OK) {
+        i2c_unlock();
         return ret;
     }
 
@@ -826,10 +1181,28 @@ esp_err_t sen55_save_voc_state(void)
     uint8_t state[8];  // 4 words = 8 data bytes
     ret = sen55_read_data_internal(state, 4);
     if (ret != ESP_OK) {
+        i2c_unlock();
         return ret;
     }
 
-    // Save to NVS
+    // Also read warm start parameter while we hold the I2C lock
+    // Datasheet: "can be gotten and set in any state" — safe to read during measurement
+    uint16_t warm_start = 0;
+    bool have_warm_start = false;
+    esp_err_t ws_ret = sen55_send_cmd_internal(CMD_WARM_START);
+    if (ws_ret == ESP_OK) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+        uint8_t ws_data[2];
+        ws_ret = sen55_read_data_internal(ws_data, 1);
+        if (ws_ret == ESP_OK) {
+            warm_start = (ws_data[0] << 8) | ws_data[1];
+            have_warm_start = true;
+        }
+    }
+
+    i2c_unlock();
+
+    // Save to NVS (no I2C needed)
     nvs_handle_t nvs;
     ret = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs);
     if (ret != ESP_OK) {
@@ -838,6 +1211,12 @@ esp_err_t sen55_save_voc_state(void)
     }
 
     ret = nvs_set_blob(nvs, NVS_KEY_VOC_STATE, state, sizeof(state));
+
+    if (ret == ESP_OK && have_warm_start) {
+        nvs_set_u16(nvs, NVS_KEY_WARM_START, warm_start);
+        ESP_LOGI(TAG, "Warm start parameter saved (%u)", warm_start);
+    }
+
     if (ret == ESP_OK) {
         ret = nvs_commit(nvs);
     }
@@ -847,6 +1226,188 @@ esp_err_t sen55_save_voc_state(void)
         ESP_LOGI(TAG, "VOC algorithm state saved to NVS");
     } else {
         ESP_LOGW(TAG, "VOC state save failed: %s", esp_err_to_name(ret));
+    }
+
+    return ret;
+}
+
+bool sen55_get_identity(sen55_identity_t *id)
+{
+    if (id == NULL || !identity.valid) {
+        return false;
+    }
+    *id = identity;
+    return true;
+}
+
+// =============================================================================
+// Temperature Compensation
+// =============================================================================
+
+esp_err_t sen55_set_temp_offset(int16_t offset_scaled200)
+{
+    if (!initialized || !dev_handle) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    // Persist to NVS first
+    nvs_handle_t nvs;
+    esp_err_t ret = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+    ret = nvs_set_i16(nvs, NVS_KEY_TEMP_OFFSET, offset_scaled200);
+    if (ret == ESP_OK) {
+        ret = nvs_commit(nvs);
+    }
+    nvs_close(nvs);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+
+    // Temp compensation requires idle mode: stop → configure → start
+    if (!i2c_lock()) {
+        ESP_LOGW(TAG, "set_temp_offset: I2C mutex timeout");
+        return ESP_ERR_TIMEOUT;
+    }
+
+    ret = sen55_stop();
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to stop for temp offset: %s", esp_err_to_name(ret));
+        i2c_unlock();
+        return ret;
+    }
+
+    configure_temp_compensation();
+
+    ret = sen55_start();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to restart after temp offset: %s", esp_err_to_name(ret));
+    }
+
+    i2c_unlock();
+    return ret;
+}
+
+esp_err_t sen55_get_temp_offset(int16_t *offset_scaled200)
+{
+    if (offset_scaled200 == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    nvs_handle_t nvs;
+    esp_err_t ret = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs);
+    if (ret != ESP_OK) {
+        *offset_scaled200 = 0;
+        return ret;
+    }
+
+    ret = nvs_get_i16(nvs, NVS_KEY_TEMP_OFFSET, offset_scaled200);
+    nvs_close(nvs);
+
+    if (ret == ESP_ERR_NVS_NOT_FOUND) {
+        *offset_scaled200 = 0;
+        return ESP_OK;  // No offset configured is not an error
+    }
+
+    return ret;
+}
+
+// =============================================================================
+// PM Number Concentrations & Particle Size (command 0x0413)
+// =============================================================================
+
+esp_err_t sen55_read_pm_details(sen55_pm_detail_t *data)
+{
+    if (data == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!initialized || !dev_handle) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!i2c_lock()) {
+        ESP_LOGW(TAG, "read_pm_details: I2C mutex timeout");
+        return ESP_ERR_TIMEOUT;
+    }
+
+    esp_err_t ret = sen55_send_cmd_internal(CMD_READ_PM_DETAILS);
+    if (ret != ESP_OK) {
+        i2c_unlock();
+        return ret;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(20));
+
+    // 10 words: 4 mass concentrations (skip), 5 number concentrations, 1 typical size
+    uint8_t raw[20];
+    ret = sen55_read_data_internal(raw, 10);
+    if (ret != ESP_OK) {
+        i2c_unlock();
+        return ret;
+    }
+
+    i2c_unlock();
+
+    // Words 4-8: Number concentrations (uint16, scale factor 10 → #/cm³)
+    uint16_t nc05_raw  = (raw[8] << 8) | raw[9];
+    uint16_t nc10_raw  = (raw[10] << 8) | raw[11];
+    uint16_t nc25_raw  = (raw[12] << 8) | raw[13];
+    uint16_t nc40_raw  = (raw[14] << 8) | raw[15];
+    uint16_t nc100_raw = (raw[16] << 8) | raw[17];
+
+    // Word 9: Typical particle size (uint16, scale factor 1000 → µm)
+    uint16_t size_raw = (raw[18] << 8) | raw[19];
+
+    data->nc_pm0_5     = (nc05_raw == 0xFFFF)  ? -1.0f : nc05_raw / 10.0f;
+    data->nc_pm1_0     = (nc10_raw == 0xFFFF)  ? -1.0f : nc10_raw / 10.0f;
+    data->nc_pm2_5     = (nc25_raw == 0xFFFF)  ? -1.0f : nc25_raw / 10.0f;
+    data->nc_pm4_0     = (nc40_raw == 0xFFFF)  ? -1.0f : nc40_raw / 10.0f;
+    data->nc_pm10      = (nc100_raw == 0xFFFF) ? -1.0f : nc100_raw / 10.0f;
+    data->typical_size = (size_raw == 0xFFFF)  ? -1.0f : size_raw / 1000.0f;
+    data->valid = true;
+
+    // Cache for API access
+    if (reading_mutex && xSemaphoreTake(reading_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        last_pm_details = *data;
+        xSemaphoreGive(reading_mutex);
+    }
+
+    return ESP_OK;
+}
+
+bool sen55_get_last_pm_details(sen55_pm_detail_t *data)
+{
+    if (data == NULL || !last_pm_details.valid) {
+        return false;
+    }
+    if (reading_mutex && xSemaphoreTake(reading_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        *data = last_pm_details;
+        xSemaphoreGive(reading_mutex);
+        return true;
+    }
+    return false;
+}
+
+esp_err_t sen55_clear_nvs(void)
+{
+    nvs_handle_t nvs;
+    esp_err_t ret = nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open NVS for clear: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    ret = nvs_erase_all(nvs);
+    if (ret == ESP_OK) {
+        ret = nvs_commit(nvs);
+    }
+    nvs_close(nvs);
+
+    if (ret == ESP_OK) {
+        ESP_LOGW(TAG, "NVS namespace '%s' erased (VOC state, warm start, temp offset, last clean)", NVS_NAMESPACE);
+    } else {
+        ESP_LOGE(TAG, "NVS erase failed: %s", esp_err_to_name(ret));
     }
 
     return ret;

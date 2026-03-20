@@ -80,6 +80,17 @@ export const METRIC_GROUPS = [
     ],
   },
   {
+    name: 'Particle Counts',
+    unit: '#/cm³',
+    yAxis: 'right',
+    metrics: [
+      { key: 'nc_pm0_5', label: 'NC 0.5', color: '#f2cdcd' },
+      { key: 'nc_pm2_5', label: 'NC 2.5', color: '#f5e0dc' },
+      { key: 'nc_pm10', label: 'NC 10', color: '#dc8a78' },
+      { key: 'typical_size', label: 'Size', color: '#cdd6f4', unit: 'µm' },
+    ],
+  },
+  {
     name: 'Fan',
     unit: '',
     yAxis: 'right',
@@ -92,7 +103,7 @@ export const METRIC_GROUPS = [
 
 export const ALL_METRICS = METRIC_GROUPS.flatMap(g => g.metrics.map(m => ({ ...m, group: g.name, unit: m.unit || g.unit, yAxis: g.yAxis })));
 
-const RANGE_METRICS = new Set(['pm1_0', 'pm2_5', 'pm4_0', 'pm10', 'humidity', 'temperature', 'voc_index', 'nox_index']);
+const RANGE_METRICS = new Set(['pm1_0', 'pm2_5', 'pm4_0', 'pm10', 'humidity', 'temperature', 'voc_index', 'nox_index', 'nc_pm0_5', 'nc_pm2_5', 'nc_pm10', 'typical_size']);
 
 export const DEFAULT_TIER = 'fine';
 export const DEFAULT_METRICS = ['pm2_5'];

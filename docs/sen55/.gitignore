@@ -1,0 +1,2 @@
+# Source PDFs are large binaries; the .md conversions are what we track
+*.pdf

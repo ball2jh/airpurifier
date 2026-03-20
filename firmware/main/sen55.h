@@ -32,6 +32,21 @@ typedef struct {
 } sen55_data_t;
 
 /**
+ * @brief SEN55 PM number concentration and particle size data
+ *
+ * From command 0x0413. Requires sensor firmware >= 0.7.
+ */
+typedef struct {
+    float nc_pm0_5;       // Number concentration PM0.5 [#/cm³]
+    float nc_pm1_0;       // Number concentration PM1.0 [#/cm³]
+    float nc_pm2_5;       // Number concentration PM2.5 [#/cm³]
+    float nc_pm4_0;       // Number concentration PM4.0 [#/cm³]
+    float nc_pm10;        // Number concentration PM10 [#/cm³]
+    float typical_size;   // Typical particle size [µm]
+    bool valid;           // Whether data was successfully read
+} sen55_pm_detail_t;
+
+/**
  * @brief Last CRC error details for debugging
  */
 typedef struct {
@@ -68,6 +83,17 @@ typedef struct {
     uint32_t raw;              // Raw 32-bit register value
     bool valid;                // Whether status was successfully read
 } sen55_device_status_t;
+
+/**
+ * @brief SEN55 sensor identity (read once at init)
+ */
+typedef struct {
+    char product_name[32];  // e.g. "SEN55"
+    char serial_number[32]; // Unique serial
+    uint8_t firmware_major; // Firmware version major
+    uint8_t firmware_minor; // Firmware version minor
+    bool valid;             // Whether identity was successfully read
+} sen55_identity_t;
 
 /**
  * @brief SEN55 health status structure
@@ -200,5 +226,67 @@ bool sen55_check_fan_cleaning(uint32_t current_unix_time);
  * @return ESP_OK on success, or ESP_OK (no-op) if uptime < 3 hours
  */
 esp_err_t sen55_save_voc_state(void);
+
+/**
+ * @brief Get sensor identity (product name, serial, firmware version)
+ *
+ * Read once during init. Returns cached result.
+ *
+ * @param identity Pointer to structure to receive identity data
+ * @return true if identity is available
+ */
+bool sen55_get_identity(sen55_identity_t *identity);
+
+/**
+ * @brief Set temperature compensation offset and persist to NVS
+ *
+ * Compensates for ESP32 self-heating bias. Stops measurement, writes
+ * offset to sensor, then restarts measurement.
+ *
+ * Calibration: compare dashboard temp to a reference thermometer at
+ * steady state, then POST the difference as a negative offset.
+ *
+ * @param offset_scaled200 Temperature offset scaled by 200 (e.g., -2.0C = -400)
+ * @return ESP_OK on success
+ */
+esp_err_t sen55_set_temp_offset(int16_t offset_scaled200);
+
+/**
+ * @brief Get current temperature compensation offset from NVS
+ *
+ * @param offset_scaled200 Pointer to receive the offset (scaled by 200)
+ * @return ESP_OK on success (returns 0 if no offset configured)
+ */
+esp_err_t sen55_get_temp_offset(int16_t *offset_scaled200);
+
+/**
+ * @brief Read PM number concentrations and typical particle size
+ *
+ * Uses command 0x0413 which returns mass + number concentrations + particle size.
+ * Only the number concentrations and particle size are stored (mass data comes
+ * from the regular sen55_read). Safe to call after sen55_read() in the same cycle.
+ *
+ * @param data Pointer to structure to receive PM detail data
+ * @return ESP_OK on success
+ */
+esp_err_t sen55_read_pm_details(sen55_pm_detail_t *data);
+
+/**
+ * @brief Get the last PM detail reading without performing I2C transaction
+ *
+ * @param data Pointer to structure to receive PM detail data
+ * @return true if valid data is available
+ */
+bool sen55_get_last_pm_details(sen55_pm_detail_t *data);
+
+/**
+ * @brief Erase all SEN55 NVS state (VOC state, warm start, temp offset, last clean)
+ *
+ * Used for factory reset. Wipes the entire "sen55" NVS namespace.
+ * Device should be rebooted after calling this.
+ *
+ * @return ESP_OK on success
+ */
+esp_err_t sen55_clear_nvs(void);
 
 #endif // SEN55_H

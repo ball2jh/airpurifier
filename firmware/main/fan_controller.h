@@ -145,4 +145,10 @@ uint8_t fan_get_target_speed(void);
  */
 void fan_check_auto_timeout(void);
 
+/**
+ * @brief Get seconds remaining until manual mode auto-reverts to auto
+ * @return Seconds remaining (>0), 0 if expired, -1 if not in manual mode
+ */
+int32_t fan_get_manual_remaining_sec(void);
+
 #endif // FAN_CONTROLLER_H

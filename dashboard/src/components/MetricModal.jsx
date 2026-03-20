@@ -38,7 +38,7 @@ const METRIC_INFO = {
     subtitle: 'Volatile Organic Compounds',
     description: 'The VOC Index mimics how a human nose perceives odors, comparing current conditions to a 24-hour average baseline of 100.',
     scale: [
-      { range: '0-100', level: 'Below Average', description: 'Fewer VOCs than normal - fresh air, air purifier running, or well-ventilated.' },
+      { range: '0-100', level: 'Below Average', description: 'Fewer VOCs than normal - fresh air or well-ventilated space.' },
       { range: '100', level: 'Average', description: 'Normal baseline - typical indoor VOC background from off-gassing materials.' },
       { range: '100-150', level: 'Slightly Elevated', description: 'Minor VOC event detected.' },
       { range: '150-250', level: 'Moderate', description: 'Noticeable VOC event - cooking, cleaning products, or new materials.' },
@@ -126,6 +126,79 @@ const METRIC_INFO = {
     unit: 'μg/m³',
     sources: 'Dust, pollen, mold, construction, road dust',
   },
+  nc_pm05: {
+    title: 'NC PM0.5',
+    subtitle: 'Number Concentration (< 0.5 µm)',
+    description: 'Count of particles smaller than 0.5 micrometers per cubic centimeter. Number concentration is more sensitive to low-level events than mass concentration. Many small particles indicate combustion or smoke.',
+    scale: [
+      { range: '0-100', level: 'Low', description: 'Minimal ultrafine particle counts.' },
+      { range: '100-500', level: 'Moderate', description: 'Moderate ultrafine particle activity.' },
+      { range: '500+', level: 'Elevated', description: 'Significant ultrafine particle presence — likely combustion event.' },
+    ],
+    unit: '#/cm³',
+    sources: 'Combustion, cooking, candles, vehicle emissions',
+  },
+  nc_pm10_nc: {
+    title: 'NC PM1.0',
+    subtitle: 'Number Concentration (< 1.0 µm)',
+    description: 'Count of particles smaller than 1.0 micrometer per cubic centimeter. Includes ultrafine particles from combustion plus slightly larger aerosols.',
+    scale: [
+      { range: '0-100', level: 'Low', description: 'Minimal fine particle counts.' },
+      { range: '100-500', level: 'Moderate', description: 'Moderate fine particle activity.' },
+      { range: '500+', level: 'Elevated', description: 'Significant fine particle presence.' },
+    ],
+    unit: '#/cm³',
+    sources: 'Combustion, cooking, candles, ambient aerosol',
+  },
+  nc_pm25: {
+    title: 'NC PM2.5',
+    subtitle: 'Number Concentration (< 2.5 µm)',
+    description: 'Count of particles smaller than 2.5 micrometers per cubic centimeter. More sensitive to low-level PM events than mass concentration.',
+    scale: [
+      { range: '0-50', level: 'Low', description: 'Minimal particle counts.' },
+      { range: '50-200', level: 'Moderate', description: 'Moderate particle activity.' },
+      { range: '200+', level: 'Elevated', description: 'Significant particle presence.' },
+    ],
+    unit: '#/cm³',
+    sources: 'Combustion, dust, cooking, industrial emissions',
+  },
+  nc_pm40: {
+    title: 'NC PM4.0',
+    subtitle: 'Number Concentration (< 4.0 µm)',
+    description: 'Count of particles smaller than 4.0 micrometers per cubic centimeter. Includes respirable dust and pollen fragments in addition to finer combustion particles.',
+    scale: [
+      { range: '0-50', level: 'Low', description: 'Minimal particle counts.' },
+      { range: '50-200', level: 'Moderate', description: 'Moderate particle activity.' },
+      { range: '200+', level: 'Elevated', description: 'Significant particle presence — likely dust or mixed sources.' },
+    ],
+    unit: '#/cm³',
+    sources: 'Dust, pollen, combustion, cooking',
+  },
+  nc_pm100: {
+    title: 'NC PM10',
+    subtitle: 'Number Concentration (< 10 µm)',
+    description: 'Count of particles smaller than 10 micrometers per cubic centimeter. Includes all inhalable particles — from ultrafine combustion to coarse dust and pollen.',
+    scale: [
+      { range: '0-50', level: 'Low', description: 'Minimal coarse particle counts.' },
+      { range: '50-200', level: 'Moderate', description: 'Moderate coarse particle activity.' },
+      { range: '200+', level: 'Elevated', description: 'Significant coarse particle presence.' },
+    ],
+    unit: '#/cm³',
+    sources: 'Dust, pollen, mold spores, construction activity',
+  },
+  typical_size: {
+    title: 'Typical Particle Size',
+    subtitle: 'Average Particle Diameter',
+    description: 'The typical (average) diameter of particles in the air. Helps distinguish event types: cooking smoke produces many small particles (< 0.5 µm) while dust produces fewer, larger ones (> 2.5 µm).',
+    scale: [
+      { range: '< 0.5 µm', level: 'Very Fine', description: 'Ultrafine particles — likely combustion or smoke.' },
+      { range: '0.5-1.0 µm', level: 'Fine', description: 'Fine particles — mix of combustion and ambient aerosol.' },
+      { range: '1.0-2.5 µm', level: 'Medium', description: 'Medium particles — could be dust, pollen, or mixed sources.' },
+      { range: '> 2.5 µm', level: 'Coarse', description: 'Coarse particles — likely dust, pollen, or mold spores.' },
+    ],
+    unit: 'µm',
+    sources: 'Particle size depends on source: smoke/combustion (< 0.5 µm), cooking (0.3-1 µm), dust (1-10 µm), pollen (10-100 µm)',
+  },
 };
 
 function getCurrentLevel(metric, value, tempUnit) {
@@ -141,6 +214,12 @@ function getCurrentLevel(metric, value, tempUnit) {
     pm1: [5, 15],
     pm4: [15, 40],
     pm10: [20, 50],
+    nc_pm05: [100, 500],
+    nc_pm10_nc: [100, 500],
+    nc_pm25: [50, 200],
+    nc_pm40: [50, 200],
+    nc_pm100: [50, 200],
+    typical_size: [0.5, 1.0, 2.5],
   };
 
   const levels = thresholds[metric];

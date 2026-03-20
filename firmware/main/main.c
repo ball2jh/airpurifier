@@ -39,6 +39,9 @@ static const char *TAG = "main";
 #define MAX_SENSOR_FAILURES     5       // Sensor failures before recovery
 #define MAX_FAN_STALL_RETRIES   3       // Fan recovery attempts before alert
 #define HISTORY_SAVE_INTERVAL_S (6 * 60 * 60)  // Auto-save history every 6 hours
+#define VOC_SAVE_INTERVAL_S     (2 * 60 * 60)  // Save VOC state every 2 hours (Sensirion recommendation)
+#define FAN_CLEAN_CHECK_INTERVAL_S (24 * 60 * 60)  // Check fan cleaning daily
+#define PM_SETTLING_MS          60000           // PM readings need 60s to stabilize after start
 
 // =============================================================================
 // State
@@ -48,7 +51,10 @@ static uint32_t loop_count = 0;
 static uint32_t sensor_failures = 0;
 static uint32_t fan_stall_retries = 0;
 static int64_t last_history_save_us = 0;  // Last auto-save timestamp
-static bool fan_clean_checked = false;    // One-time fan cleaning check done
+static int64_t last_voc_save_us = 0;      // Last VOC state save timestamp
+static int64_t last_fan_clean_check_us = 0;  // Last fan cleaning check timestamp
+static int64_t sensor_start_us = 0;       // When measurement started (for PM settling)
+static bool pm_settled = false;           // Whether PM settling period has elapsed
 
 // =============================================================================
 // Health Logging
@@ -117,6 +123,8 @@ static void handle_sensor_failure(void)
         esp_err_t ret = sen55_recover();
         if (ret == ESP_OK) {
             sensor_failures = 0;
+            sensor_start_us = esp_timer_get_time();
+            pm_settled = false;
             ESP_LOGI(TAG, "Sensor recovery successful");
         } else {
             ESP_LOGE(TAG, "Sensor recovery failed: %s", esp_err_to_name(ret));
@@ -184,42 +192,56 @@ void app_main(void)
         ESP_LOGW(TAG, "Failed to add task to TWDT: %s", esp_err_to_name(ret));
     }
 
-    // Initialize fan controller
-    ret = fan_controller_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize fan controller!");
-        return;
+    // Initialize fan controller (retry — hardware may need time after power-on)
+    for (int attempt = 1; attempt <= 5; attempt++) {
+        ret = fan_controller_init();
+        if (ret == ESP_OK) break;
+        ESP_LOGW(TAG, "Fan controller init failed (attempt %d/5): %s", attempt, esp_err_to_name(ret));
+        if (attempt == 5) {
+            ESP_LOGE(TAG, "Fan controller init exhausted retries, rebooting");
+            esp_restart();
+        }
+        esp_task_wdt_reset();
+        vTaskDelay(pdMS_TO_TICKS(2000));
     }
 
-    // Initialize SEN55 sensor
-    ret = sen55_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize SEN55 sensor!");
-        return;
+    // Initialize SEN55 sensor (retry — I2C bus may need recovery)
+    for (int attempt = 1; attempt <= 5; attempt++) {
+        ret = sen55_init();
+        if (ret == ESP_OK) break;
+        ESP_LOGW(TAG, "SEN55 init failed (attempt %d/5): %s", attempt, esp_err_to_name(ret));
+        if (attempt == 5) {
+            ESP_LOGE(TAG, "SEN55 init exhausted retries, rebooting");
+            esp_restart();
+        }
+        esp_task_wdt_reset();
+        vTaskDelay(pdMS_TO_TICKS(2000));
     }
+    sensor_start_us = esp_timer_get_time();
 
-    // Initialize history storage
+    // Initialize history storage (no retry — if flash is broken, reboot)
     ret = history_init();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize history!");
-        return;
+        ESP_LOGE(TAG, "Failed to initialize history, rebooting");
+        esp_restart();
     }
 
     // Feed watchdog before WiFi/NTP waits which can take 30s+
     esp_task_wdt_reset();
 
-    // Initialize WiFi
+    // Initialize WiFi (non-fatal — device can still run sensor+fan locally)
     ret = wifi_init();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to initialize WiFi!");
-        return;
+        ESP_LOGW(TAG, "WiFi init failed (non-critical): %s — running offline", esp_err_to_name(ret));
     }
 
     // Wait for WiFi connection (with timeout)
-    ESP_LOGI(TAG, "Waiting for WiFi connection...");
-    ret = wifi_wait_connected(30000);  // 30 second timeout
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "WiFi connection timeout - continuing anyway");
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "Waiting for WiFi connection...");
+        ret = wifi_wait_connected(30000);  // 30 second timeout
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "WiFi connection timeout - continuing anyway");
+        }
     }
 
     // Feed watchdog after WiFi wait, before NTP wait
@@ -257,11 +279,10 @@ void app_main(void)
         ESP_LOGW(TAG, "OTA init failed (non-critical): %s", esp_err_to_name(ret));
     }
 
-    // Start API server
+    // Start API server (non-fatal — sensor+fan still work without it)
     ret = api_server_start();
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start API server!");
-        return;
+        ESP_LOGW(TAG, "API server start failed (non-critical): %s", esp_err_to_name(ret));
     }
 
     ESP_LOGI(TAG, "API server running at http://%s/", wifi_get_ip());
@@ -304,12 +325,17 @@ void app_main(void)
             // Record to history (skip until NTP synced — boot-second timestamps
             // break the monotonic assumption in history_get_samples_since)
             if (time_sync_is_synced()) {
+                // PM needs 30-60s to stabilize after measurement start (Sensirion datasheet)
+                if (!pm_settled && (esp_timer_get_time() - sensor_start_us) >= (int64_t)PM_SETTLING_MS * 1000) {
+                    pm_settled = true;
+                    ESP_LOGI(TAG, "PM readings settled after %ds", PM_SETTLING_MS / 1000);
+                }
                 history_sample_t sample = {
                     .timestamp = history_get_timestamp(),
-                    .pm1_0 = air.pm1_0,
-                    .pm2_5 = air.pm2_5,
-                    .pm4_0 = air.pm4_0,
-                    .pm10 = air.pm10,
+                    .pm1_0 = pm_settled ? air.pm1_0 : -1.0f,
+                    .pm2_5 = pm_settled ? air.pm2_5 : -1.0f,
+                    .pm4_0 = pm_settled ? air.pm4_0 : -1.0f,
+                    .pm10  = pm_settled ? air.pm10  : -1.0f,
                     .humidity = air.humidity,
                     .temperature = air.temperature,
                     .voc_index = air.voc_index,
@@ -349,21 +375,25 @@ void app_main(void)
             sen55_read_device_status(&dev_status);
         }
 
-        // One-time fan cleaning check after NTP sync
-        if (!fan_clean_checked && time_sync_is_synced()) {
-            fan_clean_checked = true;
+        // Periodic fan cleaning check (daily; 0 initial value ensures first check after NTP sync)
+        int64_t now_us = esp_timer_get_time();
+        if (time_sync_is_synced() &&
+            (now_us - last_fan_clean_check_us >= (int64_t)FAN_CLEAN_CHECK_INTERVAL_S * 1000000)) {
+            last_fan_clean_check_us = now_us;
             if (sen55_check_fan_cleaning((uint32_t)time_sync_get_timestamp())) {
-                ESP_LOGI(TAG, "Fan cleaning triggered on boot");
+                ESP_LOGI(TAG, "Weekly fan cleaning triggered");
             }
         }
 
-        // Periodic history auto-save (every 6 hours)
-        int64_t now_us = esp_timer_get_time();
-        if (now_us - last_history_save_us >= (int64_t)HISTORY_SAVE_INTERVAL_S * 1000000) {
-            // Save VOC algorithm state alongside history (only effective after 3h uptime)
+        // Periodic VOC state save (every 2 hours, per Sensirion Engineering Guidelines)
+        if (now_us - last_voc_save_us >= (int64_t)VOC_SAVE_INTERVAL_S * 1000000) {
             esp_task_wdt_reset();
             sen55_save_voc_state();
+            last_voc_save_us = now_us;
+        }
 
+        // Periodic history auto-save (every 6 hours)
+        if (now_us - last_history_save_us >= (int64_t)HISTORY_SAVE_INTERVAL_S * 1000000) {
             ESP_LOGI(TAG, "Auto-saving history to flash...");
             esp_task_wdt_reset();
             if (history_save() == ESP_OK) {
@@ -375,6 +405,12 @@ void app_main(void)
                 last_history_save_us = now_us - (int64_t)HISTORY_SAVE_INTERVAL_S * 1000000
                                               + (int64_t)300 * 1000000;
             }
+        }
+
+        // Periodic PM number concentration read (~every 30s)
+        if (loop_count % 30 == 15) {
+            sen55_pm_detail_t pm_detail;
+            sen55_read_pm_details(&pm_detail);
         }
 
         vTaskDelay(pdMS_TO_TICKS(MONITOR_INTERVAL_MS));

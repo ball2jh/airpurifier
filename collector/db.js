@@ -29,6 +29,17 @@ function getDb() {
         fan_speed INTEGER
       )
     `);
+    db.run(`
+      CREATE TABLE IF NOT EXISTS pm_number_samples (
+        timestamp INTEGER PRIMARY KEY,
+        nc_pm0_5 REAL,
+        nc_pm1_0 REAL,
+        nc_pm2_5 REAL,
+        nc_pm4_0 REAL,
+        nc_pm10 REAL,
+        typical_size REAL
+      )
+    `);
   }
   return db;
 }
@@ -132,6 +143,58 @@ function iterateRawSamples(from, to) {
   `).iterate(from, to);
 }
 
+function insertPmNumberSample(timestamp, pmNumber) {
+  const db = getDb();
+  const stmt = db.query(`
+    INSERT OR REPLACE INTO pm_number_samples
+      (timestamp, nc_pm0_5, nc_pm1_0, nc_pm2_5, nc_pm4_0, nc_pm10, typical_size)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+  return stmt.run(
+    timestamp,
+    pmNumber.nc_pm0_5, pmNumber.nc_pm1_0, pmNumber.nc_pm2_5,
+    pmNumber.nc_pm4_0, pmNumber.nc_pm10, pmNumber.typical_size
+  );
+}
+
+function queryPmNumberAggregated(from, to, resolution) {
+  const db = getDb();
+  const stmt = db.query(`
+    SELECT
+      (timestamp / $resolution) * $resolution AS bucket,
+      AVG(nc_pm0_5) AS nc_pm0_5_avg, MIN(nc_pm0_5) AS nc_pm0_5_min, MAX(nc_pm0_5) AS nc_pm0_5_max,
+      AVG(nc_pm1_0) AS nc_pm1_0_avg, MIN(nc_pm1_0) AS nc_pm1_0_min, MAX(nc_pm1_0) AS nc_pm1_0_max,
+      AVG(nc_pm2_5) AS nc_pm2_5_avg, MIN(nc_pm2_5) AS nc_pm2_5_min, MAX(nc_pm2_5) AS nc_pm2_5_max,
+      AVG(nc_pm4_0) AS nc_pm4_0_avg, MIN(nc_pm4_0) AS nc_pm4_0_min, MAX(nc_pm4_0) AS nc_pm4_0_max,
+      AVG(nc_pm10) AS nc_pm10_avg, MIN(nc_pm10) AS nc_pm10_min, MAX(nc_pm10) AS nc_pm10_max,
+      AVG(typical_size) AS typical_size_avg, MIN(typical_size) AS typical_size_min, MAX(typical_size) AS typical_size_max,
+      COUNT(*) AS sample_count
+    FROM pm_number_samples
+    WHERE timestamp BETWEEN $from AND $to
+    GROUP BY bucket
+    ORDER BY bucket
+  `);
+  return stmt.all({ $from: from, $to: to, $resolution: resolution });
+}
+
+function getPmNumberStats() {
+  const db = getDb();
+  return db.query(`
+    SELECT
+      COUNT(*) AS total_samples,
+      MIN(timestamp) AS oldest_timestamp,
+      MAX(timestamp) AS newest_timestamp
+    FROM pm_number_samples
+  `).get();
+}
+
+function clearAll() {
+  const db = getDb();
+  db.run('DELETE FROM samples');
+  db.run('DELETE FROM pm_number_samples');
+  db.run('VACUUM');
+}
+
 function close() {
   if (db) {
     db.close();
@@ -139,4 +202,4 @@ function close() {
   }
 }
 
-module.exports = { getDb, insertSamples, getWatermark, queryAggregated, getStats, getRawSamples, iterateRawSamples, close };
+module.exports = { getDb, insertSamples, getWatermark, queryAggregated, getStats, getRawSamples, iterateRawSamples, insertPmNumberSample, queryPmNumberAggregated, getPmNumberStats, clearAll, close };
