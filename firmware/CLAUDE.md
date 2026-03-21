@@ -47,10 +47,11 @@ curl http://192.168.1.169/api/ota
 # IMPORTANT: save history first — cable flash won't auto-save
 curl -X POST http://192.168.1.169/api/history/save
 
-idf.py -p /dev/cu.usbserial-0001 flash
+# Use -b 115200 — the CP2102 bridge is unreliable at the default 460800
+idf.py -p /dev/ttyUSB0 -b 115200 flash
 
 # Monitor serial output (requires TTY)
-idf.py -p /dev/cu.usbserial-0001 monitor
+idf.py -p /dev/ttyUSB0 monitor
 ```
 
 ## WiFi Configuration

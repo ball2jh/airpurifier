@@ -1,6 +1,16 @@
 const MAGIC = 0x48425F31;
-const HEADER_SIZE = 28;
+const HEADER_SIZE = 32;
 const TIER_NAMES = ['raw', 'fine', 'medium', 'coarse', 'daily', 'archive'];
+
+/**
+ * Read a uint64 from a DataView as a JavaScript number.
+ * Safe for timestamps (well within Number.MAX_SAFE_INTEGER).
+ */
+function getUint64(view, offset, littleEndian) {
+  const lo = view.getUint32(offset, littleEndian);
+  const hi = view.getUint32(offset + 4, littleEndian);
+  return littleEndian ? lo + hi * 0x100000000 : hi * 0x100000000 + lo;
+}
 
 /**
  * Decode binary history response from /api/history/all into per-tier sample arrays.
@@ -22,14 +32,14 @@ export function decodeBinaryHistory(buffer) {
   }
 
   const flags = view.getUint32(4, true);
-  const serverTimestamp = view.getUint32(8, true);
-  const sampleSize = view.getUint16(12, true);
-  const tierCount = view.getUint16(14, true);
+  const serverTimestamp = getUint64(view, 8, true);
+  const sampleSize = view.getUint16(16, true);
+  const tierCount = view.getUint16(18, true);
   const isIncremental = (flags & 1) !== 0;
 
   const tierCounts = [];
   for (let i = 0; i < tierCount && i < TIER_NAMES.length; i++) {
-    tierCounts.push(view.getUint16(16 + i * 2, true));
+    tierCounts.push(view.getUint16(20 + i * 2, true));
   }
 
   const tiers = {};
@@ -46,17 +56,17 @@ export function decodeBinaryHistory(buffer) {
     for (let i = 0; i < count; i++) {
       const base = offset + i * sampleSize;
       samples[i] = {
-        timestamp: view.getUint32(base, true),
-        pm1_0: view.getFloat32(base + 4, true),
-        pm2_5: view.getFloat32(base + 8, true),
-        pm4_0: view.getFloat32(base + 12, true),
-        pm10: view.getFloat32(base + 16, true),
-        humidity: view.getFloat32(base + 20, true),
-        temperature: view.getFloat32(base + 24, true),
-        voc_index: view.getInt16(base + 28, true),
-        nox_index: view.getInt16(base + 30, true),
-        fan_rpm: view.getUint16(base + 32, true),
-        fan_speed: view.getUint8(base + 34),
+        timestamp: getUint64(view, base, true),
+        pm1_0: view.getFloat32(base + 8, true),
+        pm2_5: view.getFloat32(base + 12, true),
+        pm4_0: view.getFloat32(base + 16, true),
+        pm10: view.getFloat32(base + 20, true),
+        humidity: view.getFloat32(base + 24, true),
+        temperature: view.getFloat32(base + 28, true),
+        voc_index: view.getInt16(base + 32, true),
+        nox_index: view.getInt16(base + 34, true),
+        fan_rpm: view.getUint16(base + 36, true),
+        fan_speed: view.getUint8(base + 38),
       };
     }
 

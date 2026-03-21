@@ -380,7 +380,7 @@ void app_main(void)
         if (time_sync_is_synced() &&
             (now_us - last_fan_clean_check_us >= (int64_t)FAN_CLEAN_CHECK_INTERVAL_S * 1000000)) {
             last_fan_clean_check_us = now_us;
-            if (sen55_check_fan_cleaning((uint32_t)time_sync_get_timestamp())) {
+            if (sen55_check_fan_cleaning((uint64_t)time_sync_get_timestamp())) {
                 ESP_LOGI(TAG, "Weekly fan cleaning triggered");
             }
         }

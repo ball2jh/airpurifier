@@ -24,10 +24,10 @@
 #include "esp_err.h"
 
 /**
- * @brief Single data sample (36 bytes)
+ * @brief Single data sample (40 bytes)
  */
 typedef struct {
-    uint32_t timestamp;     // Unix timestamp (seconds since boot or epoch)
+    uint64_t timestamp;     // Unix timestamp (seconds since boot or epoch)
     float pm1_0;            // PM1.0 [µg/m³]
     float pm2_5;            // PM2.5 [µg/m³]
     float pm4_0;            // PM4.0 [µg/m³]
@@ -92,7 +92,7 @@ esp_err_t history_init(void);
  *
  * @return Timestamp in seconds
  */
-uint32_t history_get_timestamp(void);
+uint64_t history_get_timestamp(void);
 
 /**
  * @brief Record a new sample
@@ -155,7 +155,7 @@ void history_get_stats(history_stats_t *stats);
  * @param since_ts Timestamp threshold (returns samples with ts > since_ts)
  * @return Start index of first sample newer than since_ts (0 = all samples)
  */
-uint32_t history_get_samples_since(history_tier_t tier, uint32_t since_ts);
+uint32_t history_get_samples_since(history_tier_t tier, uint64_t since_ts);
 
 /**
  * @brief Clear all history data

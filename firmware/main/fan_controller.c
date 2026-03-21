@@ -57,17 +57,12 @@ static const char *TAG = "fan_ctrl";
 #define RECOVERY_BURST_MS   500     // Full-speed burst duration for recovery
 #define STARTUP_GRACE_SEC   5       // Grace period for fan spin-up before stall detection
 
-// Auto mode PM2.5 thresholds (µg/m³)
-#define PM25_THRESHOLD_LOW    5.0f   // Below: air is clean
-#define PM25_THRESHOLD_MED   15.0f   // Below: light particulates
-#define PM25_THRESHOLD_HIGH  25.0f   // Below: moderate particulates, above: high
-
-// Auto mode fan speeds (percent)
-#define AUTO_SPEED_MIN       25      // Minimum speed in AUTO mode
-#define AUTO_SPEED_LOW       25      // PM2.5 < 5
-#define AUTO_SPEED_MED       50      // PM2.5 5-15
-#define AUTO_SPEED_HIGH      75      // PM2.5 15-25
-#define AUTO_SPEED_MAX      100      // PM2.5 > 25
+// Continuous auto mode: linear map PM2.5 -> fan speed
+#define AUTO_PM25_FLOOR       5.0f   // WHO annual guideline — excellent air below this
+#define AUTO_PM25_CEILING    35.0f   // EPA Moderate/USG boundary
+#define AUTO_SPEED_MIN        25     // Minimum fan speed in AUTO (percent)
+#define AUTO_SPEED_MAX       100     // Maximum fan speed in AUTO (percent)
+#define AUTO_SLEW_RATE         2     // Max percent change per second
 
 // Manual mode timeout (return to auto after this long)
 #define MANUAL_TIMEOUT_SEC   (6 * 60 * 60)  // 6 hours
@@ -94,6 +89,7 @@ static portMUX_TYPE health_spinlock = portMUX_INITIALIZER_UNLOCKED;
 // Auto mode state (accessed from main loop and HTTP server task)
 static atomic_int current_mode = FAN_MODE_MANUAL;
 static atomic_uint_fast8_t auto_target_speed = AUTO_SPEED_MIN;
+static atomic_uint_fast8_t auto_ramped_speed = AUTO_SPEED_MIN;
 static atomic_int_fast64_t manual_mode_start_us = 0;
 
 // =============================================================================
@@ -352,6 +348,9 @@ esp_err_t fan_recover_stall(void)
     atomic_store(&stall_detected, false);
     atomic_store(&startup_grace_countdown, STARTUP_GRACE_SEC);
 
+    // Resync ramped speed so auto ramp resumes from actual speed after recovery
+    atomic_store(&auto_ramped_speed, fan_get_speed_percent());
+
     ESP_LOGI(TAG, "Stall recovery sequence completed, %d sec grace period", STARTUP_GRACE_SEC);
     return ESP_OK;
 }
@@ -407,8 +406,8 @@ void fan_set_mode(fan_mode_t mode)
             // Record when we entered manual mode for timeout tracking
             atomic_store(&manual_mode_start_us, esp_timer_get_time());
         } else {
-            // Switching to AUTO - apply the last computed target
-            fan_set_speed_percent((uint8_t)atomic_load(&auto_target_speed));
+            // Switching to AUTO - seed ramped speed from current duty so ramp is seamless
+            atomic_store(&auto_ramped_speed, fan_get_speed_percent());
         }
     } else if (mode == FAN_MODE_MANUAL) {
         // Already in manual mode but got another manual command - reset timeout
@@ -423,28 +422,38 @@ void fan_auto_update(float pm2_5)
         return;
     }
 
-    uint8_t target;
+    // Compute target speed via linear mapping (hold previous target on sensor error)
+    if (pm2_5 >= 0) {
+        float t = (pm2_5 - AUTO_PM25_FLOOR) / (AUTO_PM25_CEILING - AUTO_PM25_FLOOR);
+        if (t < 0.0f) t = 0.0f;
+        if (t > 1.0f) t = 1.0f;
+        uint8_t target = AUTO_SPEED_MIN + (uint8_t)(t * (AUTO_SPEED_MAX - AUTO_SPEED_MIN) + 0.5f);
 
-    // Compute target speed based on PM2.5 thresholds
-    if (pm2_5 < 0) {
-        // Invalid reading (sensor error), use minimum
-        target = AUTO_SPEED_MIN;
-    } else if (pm2_5 < PM25_THRESHOLD_LOW) {
-        target = AUTO_SPEED_LOW;
-    } else if (pm2_5 < PM25_THRESHOLD_MED) {
-        target = AUTO_SPEED_MED;
-    } else if (pm2_5 < PM25_THRESHOLD_HIGH) {
-        target = AUTO_SPEED_HIGH;
+        uint8_t prev_target = (uint8_t)atomic_load(&auto_target_speed);
+        if (target != prev_target) {
+            ESP_LOGI(TAG, "AUTO mode: PM2.5=%.1f -> target %d%%", pm2_5, target);
+            atomic_store(&auto_target_speed, target);
+        }
+    }
+
+    // Slew limiter: move ramped speed toward target by at most AUTO_SLEW_RATE per call
+    uint8_t target = (uint8_t)atomic_load(&auto_target_speed);
+    uint8_t ramped = (uint8_t)atomic_load(&auto_ramped_speed);
+
+    if (ramped < target) {
+        uint8_t step = target - ramped;
+        if (step > AUTO_SLEW_RATE) step = AUTO_SLEW_RATE;
+        ramped += step;
+    } else if (ramped > target) {
+        uint8_t step = ramped - target;
+        if (step > AUTO_SLEW_RATE) step = AUTO_SLEW_RATE;
+        ramped -= step;
     } else {
-        target = AUTO_SPEED_MAX;
+        return;  // Already at target, nothing to do
     }
 
-    // Only update if target changed
-    if (target != (uint8_t)atomic_load(&auto_target_speed)) {
-        ESP_LOGI(TAG, "AUTO mode: PM2.5=%.1f -> fan %d%%", pm2_5, target);
-        atomic_store(&auto_target_speed, target);
-        fan_set_speed_percent(target);
-    }
+    atomic_store(&auto_ramped_speed, ramped);
+    fan_set_speed_percent(ramped);
 }
 
 uint8_t fan_get_target_speed(void)

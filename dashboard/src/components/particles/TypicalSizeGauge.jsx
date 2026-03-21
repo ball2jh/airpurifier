@@ -1,4 +1,4 @@
-export default function TypicalSizeGauge({ typicalSize }) {
+export default function TypicalSizeGauge({ typicalSize, onMetricClick }) {
   if (typicalSize == null) return null;
 
   // Map typical_size (0–10 µm) to position (0–100%)
@@ -15,7 +15,10 @@ export default function TypicalSizeGauge({ typicalSize }) {
   ];
 
   return (
-    <div className="bg-surface rounded-xl p-4 sm:p-5">
+    <div
+      className="bg-surface rounded-xl p-4 sm:p-5 cursor-pointer transition-colors hover:bg-surface-1"
+      onClick={() => onMetricClick?.('typical_size')}
+    >
       <p className="text-xs sm:text-sm font-medium text-subtext uppercase tracking-wider mb-4">Typical Particle Size</p>
 
       {/* Gauge bar */}

@@ -11,10 +11,10 @@ export default memo(function ParticlesView({ sensor, onMetricClick }) {
   return (
     <div className="space-y-4">
       <AirColumnSimulation pmNumber={pmNumber} />
-      <DistributionBar pmNumber={pmNumber} />
+      <DistributionBar pmNumber={pmNumber} onMetricClick={onMetricClick} />
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <TypicalSizeGauge typicalSize={pmNumber?.typical_size} />
-        <MassCountComparison sensor={sensor} />
+        <TypicalSizeGauge typicalSize={pmNumber?.typical_size} onMetricClick={onMetricClick} />
+        <MassCountComparison sensor={sensor} onMetricClick={onMetricClick} />
       </div>
       <ParticleHistory />
     </div>

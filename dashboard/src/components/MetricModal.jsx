@@ -199,6 +199,60 @@ const METRIC_INFO = {
     unit: 'µm',
     sources: 'Particle size depends on source: smoke/combustion (< 0.5 µm), cooking (0.3-1 µm), dust (1-10 µm), pollen (10-100 µm)',
   },
+  fan_speed: {
+    title: 'Fan Speed (PWM)',
+    subtitle: 'Pulse Width Modulation Duty Cycle',
+    description: 'The PWM duty cycle controls how much power is delivered to the fan motor. 0% means the fan is off, 100% means full speed. The ESP32 generates a 25 kHz PWM signal that the fan\'s built-in controller uses to regulate motor speed.',
+    scale: [
+      { range: '0%', level: 'Off', description: 'Fan is not spinning. No air filtration.' },
+      { range: '1-25%', level: 'Low', description: 'Quiet operation. Suitable for sleeping or low-pollution conditions.' },
+      { range: '26-50%', level: 'Medium', description: 'Balanced airflow and noise. Good for general use.' },
+      { range: '51-75%', level: 'High', description: 'Strong airflow. Noticeably louder but effective for elevated PM.' },
+      { range: '76-100%', level: 'Max', description: 'Maximum filtration. Use during cooking, smoke events, or high outdoor pollution.' },
+    ],
+    unit: '%',
+    sources: 'Set manually via presets/gauge or automatically by auto mode based on PM2.5 levels',
+  },
+  fan_rpm: {
+    title: 'Fan RPM',
+    subtitle: 'Actual Rotational Speed',
+    description: 'The measured rotational speed of the Arctic P14 Pro fan in revolutions per minute. The fan reports its speed via a tachometer signal. RPM may differ slightly from the expected value for a given PWM due to bearing friction, air resistance, and filter loading.',
+    scale: [
+      { range: '0', level: 'Stopped', description: 'Fan is not spinning. Below ~4% PWM the fan cannot start.' },
+      { range: '426-831', level: 'Low (4-25%)', description: 'Quiet operation, ~426-831 RPM.' },
+      { range: '832-1386', level: 'Medium (26-50%)', description: 'Moderate speed, ~832-1386 RPM.' },
+      { range: '1387-1944', level: 'High (51-75%)', description: 'Strong airflow, ~1387-1944 RPM.' },
+      { range: '1945-2472', level: 'Max (76-100%)', description: 'Full speed, up to 2472 RPM.' },
+    ],
+    unit: 'RPM',
+    sources: 'Arctic P14 Pro 140mm fan with tachometer output. Stall detection triggers when RPM reads 0 at >3% PWM',
+  },
+  fan_pq_curve: {
+    title: 'Pressure vs Airflow',
+    subtitle: 'Fan Performance Curve (PQ Curve)',
+    description: 'The PQ curve shows the tradeoff between static pressure and airflow volume. As the filter loads with particles, backpressure increases and airflow decreases — the operating point moves left along the curve. A fan with higher static pressure capability maintains better airflow through dirty filters.',
+    scale: [
+      { range: '107 CFM @ 0 mmH\u2082O', level: 'Free Air', description: 'Maximum airflow with no restriction (no filter).' },
+      { range: '~80 CFM @ 2.2 mmH\u2082O', level: 'Clean Filter', description: 'Typical operating point with a clean HEPA filter.' },
+      { range: '~40 CFM @ 3.4 mmH\u2082O', level: 'Loaded Filter', description: 'Filter is accumulating particles, airflow reduced.' },
+      { range: '0 CFM @ 4.2 mmH\u2082O', level: 'Stall Pressure', description: 'Maximum static pressure — no airflow (completely blocked).' },
+    ],
+    unit: 'CFM / mmH\u2082O',
+    sources: 'Arctic P14 Pro specs: 107 CFM max airflow, 4.2 mmH\u2082O max static pressure at 2472 RPM',
+  },
+  fan_auto_mode: {
+    title: 'Auto Mode',
+    subtitle: 'PM2.5-Based Automatic Fan Control',
+    description: 'In auto mode, the firmware continuously maps PM2.5 concentration to fan speed using a linear gradient from 5 to 35 \u00b5g/m\u00b3 (25% to 100%). Floor is the WHO annual guideline (excellent air); ceiling is the EPA boundary where air becomes unhealthy for sensitive groups. Speed changes are slew-rate limited at 2% per second for smooth, quiet transitions.',
+    scale: [
+      { range: 'PM2.5 \u2264 5', level: 'Minimum (25%)', description: 'Below WHO annual guideline \u2014 air is excellent, gentle circulation only.' },
+      { range: 'PM2.5 \u2248 15', level: 'Low (50%)', description: 'At WHO 24-hour guideline \u2014 moderate speed for steady filtration.' },
+      { range: 'PM2.5 \u2248 25', level: 'Moderate (75%)', description: 'Approaching EPA Moderate ceiling \u2014 higher speed to bring levels down.' },
+      { range: 'PM2.5 \u2265 35', level: 'Maximum (100%)', description: 'EPA Unhealthy for Sensitive Groups boundary \u2014 maximum speed.' },
+    ],
+    unit: '\u00b5g/m\u00b3 \u2192 %',
+    sources: 'Firmware auto mode with continuous linear mapping (5\u201335 \u00b5g/m\u00b3 \u2192 25\u2013100%) based on WHO/EPA guidelines. 2%/s slew rate. Manual override returns to auto after a timeout period',
+  },
 };
 
 function getCurrentLevel(metric, value, tempUnit) {
@@ -220,6 +274,9 @@ function getCurrentLevel(metric, value, tempUnit) {
     nc_pm40: [50, 200],
     nc_pm100: [50, 200],
     typical_size: [0.5, 1.0, 2.5],
+    fan_speed: [0, 25, 50, 75],
+    fan_rpm: [0, 831, 1386, 1944],
+    fan_auto_mode: [15, 25, 35],
   };
 
   const levels = thresholds[metric];

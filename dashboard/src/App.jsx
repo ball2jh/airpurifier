@@ -281,11 +281,9 @@ function Dashboard() {
         <div className="flex items-center gap-2">
           <h1 className="text-base md:text-xl font-semibold text-text truncate">Air Purifier</h1>
           <span className={`w-2 h-2 rounded-full shrink-0 ${isConnected ? 'bg-green shadow-[0_0_6px_#a6e3a1]' : 'bg-red shadow-[0_0_6px_#f38ba8]'}`} />
-          {secondsAgo > 5 && (
-            <span className={`text-xs tabular-nums hidden sm:inline ${secondsAgo > 10 ? 'text-yellow' : 'text-overlay'}`}>
-              {secondsAgo}s ago
-            </span>
-          )}
+          <span className={`text-xs tabular-nums hidden sm:inline transition-opacity ${secondsAgo > 5 ? 'opacity-100' : 'opacity-0'} ${secondsAgo > 10 ? 'text-yellow' : 'text-overlay'}`}>
+            {secondsAgo}s ago
+          </span>
         </div>
 
         <nav className="flex gap-1 sm:gap-2">
@@ -367,6 +365,9 @@ function Dashboard() {
             selectedMetric === 'nc_pm40' ? sensor.pm_number?.nc_pm4_0 :
             selectedMetric === 'nc_pm100' ? sensor.pm_number?.nc_pm10 :
             selectedMetric === 'typical_size' ? sensor.pm_number?.typical_size :
+            selectedMetric === 'fan_speed' ? fan.speed_percent :
+            selectedMetric === 'fan_rpm' ? fan.rpm :
+            selectedMetric === 'fan_auto_mode' ? sensor.pm2_5 :
             null
           }
           onClose={() => setSelectedMetric(null)}
@@ -413,7 +414,7 @@ function Dashboard() {
 
       {view === 'fan' && (
         <main>
-          <FanControl />
+          <FanControl onMetricClick={setSelectedMetric} />
         </main>
       )}
 

@@ -1,4 +1,5 @@
-import { useRef, useEffect, useState } from 'react';
+import { useRef, useEffect, useState, useCallback } from 'react';
+import { Maximize2, Minimize2 } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { computeDifferentialBins, BIN_COLORS, BIN_SHORT_LABELS } from '@/utils/particleSource';
 
@@ -31,6 +32,9 @@ const CONVECTION_LERP = 0.02;
 const CONVECTION_INTERVAL_MIN = 3000; // ms
 const CONVECTION_INTERVAL_MAX = 8000;
 
+// Reference height the physics constants were tuned for
+const REF_HEIGHT = 500;
+
 // Spawn/removal fade duration in frames
 const FADE_FRAMES = 30;
 const MAX_TRANSITIONS_PER_FRAME = 3;
@@ -59,7 +63,6 @@ function createState(width, height) {
     lastTime: performance.now(),
     width,
     height,
-    bgGradient: null,
     sortScratch: new Array(MAX_PARTICLES),
     binCounts: [0, 0, 0, 0, 0],
     sortOffsets: [0, 0, 0, 0, 0],
@@ -110,9 +113,31 @@ function createSprites(dpr) {
 export default function AirColumnSimulation({ pmNumber }) {
   const canvasRef = useRef(null);
   const containerRef = useRef(null);
+  const cardRef = useRef(null);
   const stateRef = useRef(null);
   const dataRef = useRef(pmNumber);
   const [demoIndex, setDemoIndex] = useState(0);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  const toggleFullscreen = useCallback(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    if (!document.fullscreenElement) {
+      (el.requestFullscreen || el.webkitRequestFullscreen)?.call(el);
+    } else {
+      (document.exitFullscreen || document.webkitExitFullscreen)?.call(document);
+    }
+  }, []);
+
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', onChange);
+    document.addEventListener('webkitfullscreenchange', onChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onChange);
+      document.removeEventListener('webkitfullscreenchange', onChange);
+    };
+  }, []);
 
   const activePreset = DEMO_PRESETS?.[demoIndex] ?? null;
   const effectiveData = activePreset || pmNumber;
@@ -134,7 +159,9 @@ export default function AirColumnSimulation({ pmNumber }) {
       const dpr = window.devicePixelRatio || 1;
       const rect = container.getBoundingClientRect();
       const w = rect.width;
-      const h = Math.min(500, Math.max(300, w * 1.2));
+      const h = document.fullscreenElement
+        ? window.innerHeight - 52  // subtract card header height
+        : Math.min(500, Math.max(300, w * 1.2));
       canvas.width = w * dpr;
       canvas.height = h * dpr;
       canvas.style.width = `${w}px`;
@@ -144,9 +171,19 @@ export default function AirColumnSimulation({ pmNumber }) {
         sprites = createSprites(dpr);
       }
       if (stateRef.current) {
+        const oldW = stateRef.current.width;
+        const oldH = stateRef.current.height;
+        if (oldW > 0 && oldH > 0 && (w !== oldW || h !== oldH)) {
+          const scaleX = w / oldW;
+          const scaleY = h / oldH;
+          for (const p of stateRef.current.particles) {
+            p.x *= scaleX;
+            p.y *= scaleY;
+          }
+        }
         stateRef.current.width = w;
         stateRef.current.height = h;
-        stateRef.current.bgGradient = null;
+
       } else {
         stateRef.current = createState(w, h);
       }
@@ -155,6 +192,11 @@ export default function AirColumnSimulation({ pmNumber }) {
     resize();
     const ro = new ResizeObserver(resize);
     ro.observe(container);
+
+    // Re-resize when entering/exiting fullscreen
+    const onFullscreenChange = () => requestAnimationFrame(resize);
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', onFullscreenChange);
 
     const ctx = canvas.getContext('2d');
     let rafId;
@@ -167,15 +209,19 @@ export default function AirColumnSimulation({ pmNumber }) {
         return;
       }
 
-      const rawCounts = bins.map(b => mapCount(b.count));
+      // Scale particle cap by canvas area relative to reference size
+      const areaScale = (state.width * state.height) / (state.width * REF_HEIGHT);
+      const cap = Math.round(MAX_PARTICLES * areaScale);
+
+      const rawCounts = bins.map(b => mapCount(Math.round(b.count * areaScale)));
       let total = rawCounts.reduce((s, c) => s + c, 0);
 
       // Proportionally scale down if over cap
-      if (total > MAX_PARTICLES) {
-        const scale = MAX_PARTICLES / total;
+      if (total > cap) {
+        const scale = cap / total;
         for (let i = 0; i < 5; i++) rawCounts[i] = Math.round(rawCounts[i] * scale);
         total = rawCounts.reduce((s, c) => s + c, 0);
-        while (total > MAX_PARTICLES) {
+        while (total > cap) {
           let maxIdx = 0;
           for (let i = 1; i < 5; i++) if (rawCounts[i] > rawCounts[maxIdx]) maxIdx = i;
           rawCounts[maxIdx]--;
@@ -228,6 +274,7 @@ export default function AirColumnSimulation({ pmNumber }) {
         dying: false,
         age: 0,
         depthOpacity: randomBetween(0.7, 1.0),
+        settleScale: randomBetween(0.7, 1.3),
       };
     }
 
@@ -261,10 +308,11 @@ export default function AirColumnSimulation({ pmNumber }) {
     }
 
     function updateConvection(state, now) {
+      const scale = state.height / REF_HEIGHT;
       if (now >= state.nextConvectionTime) {
         state.convectionTarget = {
-          x: randomBetween(-CONVECTION_MAX_X, CONVECTION_MAX_X),
-          y: randomBetween(-CONVECTION_MAX_Y, CONVECTION_MAX_Y),
+          x: randomBetween(-CONVECTION_MAX_X, CONVECTION_MAX_X) * scale,
+          y: randomBetween(-CONVECTION_MAX_Y, CONVECTION_MAX_Y) * scale,
         };
         state.nextConvectionTime = now + randomBetween(CONVECTION_INTERVAL_MIN, CONVECTION_INTERVAL_MAX);
       }
@@ -274,6 +322,7 @@ export default function AirColumnSimulation({ pmNumber }) {
 
     function applyPhysics(state, dt) {
       const { width, height, convection } = state;
+      const scale = height / REF_HEIGHT;
       const particles = state.particles;
       let writeIdx = 0;
 
@@ -294,12 +343,12 @@ export default function AirColumnSimulation({ pmNumber }) {
 
         const d = BIN_DIAMETERS[p.bin];
 
-        // Brownian motion
-        p.x += (BROWNIAN_BASE / d) * (Math.random() * 2 - 1);
-        p.y += (BROWNIAN_BASE / d) * (Math.random() * 2 - 1);
+        // Brownian motion (scaled to canvas size)
+        p.x += (BROWNIAN_BASE / d) * (Math.random() * 2 - 1) * scale;
+        p.y += (BROWNIAN_BASE / d) * (Math.random() * 2 - 1) * scale;
 
-        // Gravitational settling
-        p.y += SETTLE_SPEEDS[p.bin] * dt;
+        // Gravitational settling (per-particle variation, scaled to canvas size)
+        p.y += SETTLE_SPEEDS[p.bin] * p.settleScale * dt * scale;
 
         // Convective drift
         p.x += convection.x;
@@ -355,14 +404,8 @@ export default function AirColumnSimulation({ pmNumber }) {
 
       ctx.setTransform(currentDpr, 0, 0, currentDpr, 0, 0);
 
-      // Cached background gradient (invalidated on resize)
-      if (!state.bgGradient) {
-        const grad = ctx.createLinearGradient(0, 0, 0, height);
-        grad.addColorStop(0, '#1e1e2e');
-        grad.addColorStop(1, '#181825');
-        state.bgGradient = grad;
-      }
-      ctx.fillStyle = state.bgGradient;
+      // Solid background (no gradient — avoids color banding on large canvases)
+      ctx.fillStyle = '#1b1b2b';
       ctx.fillRect(0, 0, width, height);
 
       const isMobile = width < 400;
@@ -412,11 +455,13 @@ export default function AirColumnSimulation({ pmNumber }) {
       cancelAnimationFrame(rafId);
       clearInterval(dataInterval);
       ro.disconnect();
+      document.removeEventListener('fullscreenchange', onFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', onFullscreenChange);
     };
   }, []);
 
   return (
-    <Card>
+    <Card ref={cardRef} className={isFullscreen ? 'flex flex-col h-full bg-base' : ''}>
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2 px-6 pt-4">
         <div className="flex items-center gap-2">
           <CardTitle className="text-sm font-medium">Air Column</CardTitle>
@@ -439,14 +484,21 @@ export default function AirColumnSimulation({ pmNumber }) {
               <span className="text-sm text-overlay">{BIN_SHORT_LABELS[i]}</span>
             </div>
           ))}
+          <button
+            onClick={toggleFullscreen}
+            className="ml-2 p-1 rounded-lg text-overlay hover:text-text hover:bg-surface-1 transition-colors"
+            title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+          >
+            {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+          </button>
         </div>
       </CardHeader>
-      <CardContent className="px-4 pb-4 pt-0">
-        <div ref={containerRef} className="w-full">
+      <CardContent className={`px-4 pb-4 pt-0 ${isFullscreen ? 'flex-1 flex flex-col' : ''}`}>
+        <div ref={containerRef} className={`w-full ${isFullscreen ? 'flex-1' : ''}`}>
           <canvas
             ref={canvasRef}
             className="rounded-lg w-full"
-            style={{ minHeight: 300, maxHeight: 500 }}
+            style={isFullscreen ? { minHeight: 0 } : { minHeight: 300, maxHeight: 500 }}
           />
         </div>
       </CardContent>

@@ -137,8 +137,8 @@ static const uint32_t view_time_windows[TIER_COUNT] = {
 static esp_err_t output_csv_sample(httpd_req_t *req, const history_sample_t *s, char *line_buf, size_t buf_size)
 {
     int len = snprintf(line_buf, buf_size,
-        "%lu,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%d,%d,%u,%u\n",
-        (unsigned long)s->timestamp,
+        "%llu,%.1f,%.1f,%.1f,%.1f,%.1f,%.1f,%d,%d,%u,%u\n",
+        (unsigned long long)s->timestamp,
         s->pm1_0, s->pm2_5, s->pm4_0, s->pm10,
         s->humidity, s->temperature,
         s->voc_index, s->nox_index,
@@ -150,7 +150,7 @@ static esp_err_t output_csv_sample(httpd_req_t *req, const history_sample_t *s, 
  * @brief Accumulator for aggregating samples into a bucket
  */
 typedef struct {
-    uint32_t bucket_start_ts;   // Timestamp of bucket start
+    uint64_t bucket_start_ts;   // Timestamp of bucket start
     float sum_pm1, sum_pm25, sum_pm4, sum_pm10;
     float sum_hum, sum_temp;
     int32_t sum_voc, sum_nox;
@@ -161,7 +161,7 @@ typedef struct {
 /**
  * @brief Reset accumulator for a new bucket
  */
-static void reset_accumulator(sample_accumulator_t *acc, uint32_t bucket_ts)
+static void reset_accumulator(sample_accumulator_t *acc, uint64_t bucket_ts)
 {
     memset(acc, 0, sizeof(*acc));
     acc->bucket_start_ts = bucket_ts;
@@ -227,8 +227,8 @@ static esp_err_t output_tier_in_range(
     httpd_req_t *req,
     history_tier_t source_tier,
     uint32_t target_resolution_s,
-    uint32_t min_bucket,
-    uint32_t max_bucket)
+    uint64_t min_bucket,
+    uint64_t max_bucket)
 {
     if (min_bucket >= max_bucket) return ESP_OK;
 
@@ -254,7 +254,7 @@ static esp_err_t output_tier_in_range(
             history_sample_t *s = &samples[i];
 
             // Calculate which bucket this sample belongs to
-            uint32_t bucket_ts = (s->timestamp / target_resolution_s) * target_resolution_s;
+            uint64_t bucket_ts = (s->timestamp / target_resolution_s) * target_resolution_s;
 
             // Skip samples whose BUCKET is outside our range
             // This prevents overlap between tiers
@@ -287,20 +287,20 @@ done:
 
 /**
  * @brief Find the oldest timestamp in a tier that's >= min_ts
- * @return The oldest timestamp, or UINT32_MAX if no samples in range
+ * @return The oldest timestamp, or UINT64_MAX if no samples in range
  */
-static uint32_t find_tier_oldest_in_range(history_tier_t tier, uint32_t min_ts)
+static uint64_t find_tier_oldest_in_range(history_tier_t tier, uint64_t min_ts)
 {
     uint32_t total = history_get_count(tier);
-    if (total == 0) return UINT32_MAX;
+    if (total == 0) return UINT64_MAX;
 
     // Samples are stored oldest first, so scan from start
     const uint32_t batch_size = 50;
     history_sample_t *samples = malloc(batch_size * sizeof(history_sample_t));
-    if (samples == NULL) return UINT32_MAX;
+    if (samples == NULL) return UINT64_MAX;
 
     uint32_t offset = 0;
-    uint32_t oldest = UINT32_MAX;
+    uint64_t oldest = UINT64_MAX;
 
     while (offset < total) {
         uint32_t count = 0;
@@ -514,14 +514,14 @@ static esp_err_t history_send_csv(httpd_req_t *req, history_tier_t view)
     httpd_resp_send_chunk(req, header, strlen(header));
 
     // Get current time and calculate cutoff based on requested time window
-    uint32_t now = history_get_timestamp();
+    uint64_t now = history_get_timestamp();
     uint32_t time_window = view_time_windows[view];
-    uint32_t cutoff = (now > time_window) ? (now - time_window) : 0;
+    uint64_t cutoff = (now > time_window) ? (now - time_window) : 0;
     uint32_t target_resolution = tier_resolutions[view];
 
     // Find where each tier's data starts (within our time window)
     // This tells us which tier to use for each time period
-    uint32_t tier_oldest[TIER_COUNT];
+    uint64_t tier_oldest[TIER_COUNT];
     for (int t = 0; t < TIER_COUNT; t++) {
         tier_oldest[t] = find_tier_oldest_in_range((history_tier_t)t, cutoff);
     }
@@ -530,15 +530,15 @@ static esp_err_t history_send_csv(httpd_req_t *req, history_tier_t view)
     // Each tier fills in time periods that finer tiers don't cover
     for (int tier = TIER_ARCHIVE; tier >= TIER_RAW; tier--) {
         // Skip if this tier has no data in our time window
-        if (tier_oldest[tier] == UINT32_MAX) continue;
+        if (tier_oldest[tier] == UINT64_MAX) continue;
 
         // Determine upper bound: where the next finer tier's data starts
         // This tier only outputs data OLDER than what finer tiers can provide
-        uint32_t upper_bound = now + 1;  // Default: cover up to now
+        uint64_t upper_bound = now + 1;  // Default: cover up to now
 
         // Find the finest tier (lower index) that has data
         for (int finer = tier - 1; finer >= TIER_RAW; finer--) {
-            if (tier_oldest[finer] != UINT32_MAX) {
+            if (tier_oldest[finer] != UINT64_MAX) {
                 upper_bound = tier_oldest[finer];
                 break;
             }
@@ -547,12 +547,12 @@ static esp_err_t history_send_csv(httpd_req_t *req, history_tier_t view)
         // Align boundaries to bucket boundaries to prevent overlap
         // When samples from different tiers fall into the same bucket,
         // only the finer tier should output that bucket
-        uint32_t range_start = tier_oldest[tier];
+        uint64_t range_start = tier_oldest[tier];
         if (range_start < cutoff) range_start = cutoff;
 
         // Align to bucket boundaries
-        uint32_t min_bucket = (range_start / target_resolution) * target_resolution;
-        uint32_t max_bucket = ((upper_bound + target_resolution - 1) / target_resolution) * target_resolution;
+        uint64_t min_bucket = (range_start / target_resolution) * target_resolution;
+        uint64_t max_bucket = ((upper_bound + target_resolution - 1) / target_resolution) * target_resolution;
 
         esp_err_t err = output_tier_in_range(req, (history_tier_t)tier, target_resolution,
                             min_bucket, max_bucket);
@@ -959,10 +959,10 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
 // =============================================================================
 
 /**
- * Binary wire format header (28 bytes, packed):
+ * Binary wire format header (32 bytes, packed):
  *   [4] magic: 0x48425F31 ("HB_1")
  *   [4] flags: bit 0 = incremental response
- *   [4] server_timestamp (uint32_t)
+ *   [8] server_timestamp (uint64_t)
  *   [2] sample_size (sizeof(history_sample_t))
  *   [2] tier_count (6)
  *  [12] tier_sample_counts: uint16_t[6]
@@ -970,7 +970,7 @@ static esp_err_t ota_post_handler(httpd_req_t *req)
 typedef struct __attribute__((packed)) {
     uint32_t magic;
     uint32_t flags;
-    uint32_t server_timestamp;
+    uint64_t server_timestamp;
     uint16_t sample_size;
     uint16_t tier_count;
     uint16_t tier_sample_counts[TIER_COUNT];
@@ -990,10 +990,10 @@ static esp_err_t history_binary_handler(httpd_req_t *req)
     // Parse since query param
     char query[64] = {0};
     httpd_req_get_url_query_str(req, query, sizeof(query));
-    uint32_t since_ts = 0;
-    char param[16];
+    uint64_t since_ts = 0;
+    char param[24];
     if (httpd_query_key_value(query, "since", param, sizeof(param)) == ESP_OK) {
-        since_ts = (uint32_t)strtoul(param, NULL, 10);
+        since_ts = (uint64_t)strtoull(param, NULL, 10);
     }
 
     // Determine samples per tier

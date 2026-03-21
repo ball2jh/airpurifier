@@ -57,6 +57,7 @@ function insertSamples(samples, resolution) {
   const tx = db.transaction((items) => {
     let inserted = 0;
     for (const s of items) {
+      if (s.pm2_5 < 0) continue;  // skip invalid/settling readings
       const result = stmt.run(
         s.timestamp, resolution,
         s.pm1_0, s.pm2_5, s.pm4_0, s.pm10,

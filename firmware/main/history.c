@@ -16,7 +16,7 @@
 #include <assert.h>
 #include "time_sync.h"
 
-_Static_assert(sizeof(history_sample_t) == 36,
+_Static_assert(sizeof(history_sample_t) == 40,
                "history_sample_t size changed — update binary decoder and wire format");
 #include "esp_log.h"
 #include "esp_partition.h"
@@ -33,7 +33,7 @@ static const char *TAG = "history";
 // Tier Configuration
 // =============================================================================
 
-#define RAW_CAPACITY      1800    // ~30 min at 1s intervals
+#define RAW_CAPACITY      1500    // ~25 min at 1s intervals
 #define FINE_CAPACITY     360     // 6 hours at 1 min
 #define MEDIUM_CAPACITY   144     // 24 hours at 10 min
 #define COARSE_CAPACITY   168     // 7 days at 1 hour
@@ -85,7 +85,7 @@ static SemaphoreHandle_t history_mutex = NULL;
 // Wide accumulator for averaging raw samples into fine tier
 // Uses wider types to prevent overflow (e.g., uint16_t fan_rpm * 30 samples > 65535)
 typedef struct {
-    uint32_t timestamp;
+    uint64_t timestamp;
     float pm1_0, pm2_5, pm4_0, pm10;
     float humidity, temperature;
     int32_t voc_index, nox_index;
@@ -100,17 +100,17 @@ static uint32_t accumulator_count = 0;  // Total samples (including invalid)
 // Helper Functions
 // =============================================================================
 
-_Static_assert(sizeof(time_t) <= sizeof(uint32_t),
-               "time_t exceeds uint32_t; update timestamp handling");
+_Static_assert(sizeof(time_t) >= sizeof(uint64_t),
+               "time_t smaller than uint64_t; update timestamp handling");
 
 /**
  * @brief Get current timestamp for history records
  *
  * Returns Unix timestamp if NTP is synced, otherwise seconds since boot.
  */
-uint32_t history_get_timestamp(void)
+uint64_t history_get_timestamp(void)
 {
-    return (uint32_t)time_sync_get_timestamp();
+    return (uint64_t)time_sync_get_timestamp();
 }
 
 /**
@@ -594,7 +594,7 @@ void history_get_stats(history_stats_t *stats)
     xSemaphoreGive(history_mutex);
 }
 
-uint32_t history_get_samples_since(history_tier_t tier, uint32_t since_ts)
+uint32_t history_get_samples_since(history_tier_t tier, uint64_t since_ts)
 {
     if (!initialized || tier >= TIER_COUNT) {
         return 0;
@@ -664,7 +664,7 @@ void history_clear(void)
 #define HISTORY_MAGIC       0x48495354  // "HIST"
 #define HISTORY_VERSION     1
 
-#define SLOT_SIZE           (33 * 4096)     // 135168 bytes = 132KB
+#define SLOT_SIZE           (34 * 4096)     // 139264 bytes = 136KB
 #define SLOT_A_OFFSET       0
 #define SLOT_B_OFFSET       SLOT_SIZE
 #define SECTOR_SIZE         4096

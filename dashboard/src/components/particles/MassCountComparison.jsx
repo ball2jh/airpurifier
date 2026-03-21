@@ -1,6 +1,6 @@
 import { computeDifferentialBins } from '@/utils/particleSource';
 
-export default function MassCountComparison({ sensor }) {
+export default function MassCountComparison({ sensor, onMetricClick }) {
   const pm = sensor || {};
   const nc = pm.pm_number || {};
   // Use sum of rounded differential bins so the total matches DistributionBar
@@ -19,17 +19,21 @@ export default function MassCountComparison({ sensor }) {
           <p className="text-xs text-overlay mb-2">Mass (µg/m³)</p>
           <div className="space-y-1.5">
             {[
-              { label: 'PM1', value: pm.pm1_0 },
-              { label: 'PM2.5', value: pm.pm2_5 },
-              { label: 'PM4', value: pm.pm4_0 },
-              { label: 'PM10', value: pm.pm10 },
+              { label: 'PM1', value: pm.pm1_0, key: 'pm1' },
+              { label: 'PM2.5', value: pm.pm2_5, key: 'pm25' },
+              { label: 'PM4', value: pm.pm4_0, key: 'pm4' },
+              { label: 'PM10', value: pm.pm10, key: 'pm10' },
             ].map(m => (
-              <div key={m.label} className="flex items-baseline justify-between">
+              <button
+                key={m.label}
+                className="flex items-baseline justify-between w-full rounded px-1 -mx-1 transition-colors hover:bg-surface-1 cursor-pointer"
+                onClick={() => onMetricClick?.(m.key)}
+              >
                 <span className="text-xs text-overlay">{m.label}</span>
                 <span className="text-sm font-semibold text-text tabular-nums">
                   {m.value != null ? m.value.toFixed(1) : '--'}
                 </span>
-              </div>
+              </button>
             ))}
           </div>
         </div>
@@ -37,7 +41,10 @@ export default function MassCountComparison({ sensor }) {
         {/* Count side */}
         <div>
           <p className="text-xs text-overlay mb-2">Count (#/cm³)</p>
-          <div className="flex flex-col items-center justify-center h-[calc(100%-1.5rem)]">
+          <button
+            className="flex flex-col items-center justify-center h-[calc(100%-1.5rem)] w-full rounded-lg transition-colors hover:bg-surface-1 cursor-pointer"
+            onClick={() => onMetricClick?.('nc_pm100')}
+          >
             <span className="text-3xl font-bold text-text tabular-nums">
               {totalCount != null ? totalCount.toFixed(0) : '--'}
             </span>
@@ -47,7 +54,7 @@ export default function MassCountComparison({ sensor }) {
                 {(pm.pm2_5 / totalCount).toFixed(3)} µg per particle
               </span>
             )}
-          </div>
+          </button>
         </div>
       </div>
     </div>

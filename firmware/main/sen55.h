@@ -214,7 +214,7 @@ esp_err_t sen55_start_fan_cleaning(void);
  * @param current_unix_time Current Unix timestamp (from NTP)
  * @return true if cleaning was triggered
  */
-bool sen55_check_fan_cleaning(uint32_t current_unix_time);
+bool sen55_check_fan_cleaning(uint64_t current_unix_time);
 
 /**
  * @brief Save VOC algorithm state to NVS

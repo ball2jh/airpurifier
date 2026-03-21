@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, Info } from 'lucide-react';
 import {
   LineChart,
   Line,
@@ -112,7 +112,7 @@ function ArcIcon({ progress, color, isActive }) {
   );
 }
 
-function CircularGauge({ value, onChange, isPending, windowWidth }) {
+function CircularGauge({ value, onChange, isPending, windowWidth, colorOverride }) {
   const svgRef = useRef(null);
   const [isDragging, setIsDragging] = useState(false);
   const [fanRotation, setFanRotation] = useState(0);
@@ -217,8 +217,9 @@ function CircularGauge({ value, onChange, isPending, windowWidth }) {
   const knobX = center + radius * Math.cos(knobRad);
   const knobY = center + radius * Math.sin(knobRad);
 
-  // Color based on speed
+  // Color based on speed (or override from auto mode)
   const getColor = () => {
+    if (colorOverride) return colorOverride;
     if (value === 0) return '#6c7086';
     if (value <= 25) return '#a6e3a1';
     if (value <= 50) return '#89b4fa';
@@ -292,7 +293,7 @@ function CircularGauge({ value, onChange, isPending, windowWidth }) {
   );
 }
 
-export default function FanControl() {
+export default function FanControl({ onMetricClick }) {
   const queryClient = useQueryClient();
   const windowWidth = useWindowWidth();
   const [burstMode, setBurstMode] = useState(false);
@@ -486,15 +487,37 @@ export default function FanControl() {
   const expectedRpm = getRpmFromPwm(localSpeed);
   const currentCfm = rpm > 0 ? Math.round((rpm / 2472) * 107) : 0;
 
-  // PM2.5 thresholds for auto mode display
-  const autoThresholds = [
-    { max: 5, speed: 25, label: 'Clean' },
-    { max: 15, speed: 50, label: 'Light' },
-    { max: 25, speed: 75, label: 'Moderate' },
-    { max: Infinity, speed: 100, label: 'High' },
-  ];
+  // Continuous auto mode constants (mirrors firmware)
+  const AUTO_PM25_FLOOR = 5;
+  const AUTO_PM25_CEILING = 35;
+  const AUTO_SPEED_MIN = 25;
+  const AUTO_SPEED_MAX = 100;
 
-  const currentThreshold = autoThresholds.find(t => (pm25 ?? 0) < t.max) || autoThresholds[3];
+  const pm25ToSpeed = (pm) => {
+    const t = Math.max(0, Math.min(1, (pm - AUTO_PM25_FLOOR) / (AUTO_PM25_CEILING - AUTO_PM25_FLOOR)));
+    return Math.round(AUTO_SPEED_MIN + t * (AUTO_SPEED_MAX - AUTO_SPEED_MIN));
+  };
+
+  // Gradient color stops for the auto mode bar
+  const gradientColors = ['#a6e3a1', '#89b4fa', '#f9e2af', '#fab387'];
+
+  const interpolateGradient = (t) => {
+    // t in [0, 1] -> interpolate through 4 color stops
+    const clampedT = Math.max(0, Math.min(1, t));
+    const segment = clampedT * (gradientColors.length - 1);
+    const i = Math.min(Math.floor(segment), gradientColors.length - 2);
+    const f = segment - i;
+    const c1 = gradientColors[i], c2 = gradientColors[i + 1];
+    const r = Math.round(parseInt(c1.slice(1, 3), 16) * (1 - f) + parseInt(c2.slice(1, 3), 16) * f);
+    const g = Math.round(parseInt(c1.slice(3, 5), 16) * (1 - f) + parseInt(c2.slice(3, 5), 16) * f);
+    const b = Math.round(parseInt(c1.slice(5, 7), 16) * (1 - f) + parseInt(c2.slice(5, 7), 16) * f);
+    return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+  };
+
+  const currentPm25 = pm25 ?? 0;
+  const pm25Fraction = Math.max(0, Math.min(1, (currentPm25 - AUTO_PM25_FLOOR) / (AUTO_PM25_CEILING - AUTO_PM25_FLOOR)));
+  const computedTarget = pm25ToSpeed(currentPm25);
+  const isRamping = currentSpeed !== targetSpeed;
 
   return (
     <div className="space-y-6">
@@ -537,52 +560,72 @@ export default function FanControl() {
               onChange={handleGaugeChange}
               isPending={mutation.isPending || modeMutation.isPending}
               windowWidth={windowWidth}
+              colorOverride={isAuto ? interpolateGradient(pm25Fraction) : undefined}
             />
 
             {/* Center overlay with value */}
             <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none pt-6">
-              <span className="text-3xl font-bold tabular-nums text-text">
+              <button
+                className="pointer-events-auto text-3xl font-bold tabular-nums text-text hover:text-blue transition-colors cursor-pointer"
+                onClick={() => onMetricClick?.('fan_speed')}
+              >
                 {displaySpeed}%
-              </span>
-              <div className="flex items-center gap-1.5 mt-0.5">
+              </button>
+              <button
+                className="pointer-events-auto flex items-center gap-1.5 mt-0.5 hover:text-blue transition-colors cursor-pointer"
+                onClick={() => onMetricClick?.('fan_rpm')}
+              >
                 <span className="text-xs text-subtext">{rpm} RPM</span>
                 {stalled && (
                   <AlertTriangle className="w-3 h-3 text-red" />
                 )}
-              </div>
+              </button>
             </div>
           </div>
 
-          {/* Auto Mode: PM2.5 Thresholds */}
+          {/* Auto Mode: Gradient Bar */}
           {isAuto && (
             <div className="w-full max-w-xs mb-4">
-              <div className="grid grid-cols-4 gap-1 bg-mantle rounded-xl p-1">
-                {autoThresholds.map((t, i) => {
-                  const isActive = currentThreshold === t;
-                  const colors = ['#a6e3a1', '#89b4fa', '#f9e2af', '#fab387'];
-                  return (
-                    <div
-                      key={i}
-                      className={`py-2 px-1 text-center rounded-lg transition-all ${
-                        isActive ? 'bg-surface shadow-sm' : ''
-                      }`}
-                    >
-                      <div
-                        className="text-lg font-bold mb-0.5"
-                        style={{ color: isActive ? colors[i] : '#6c7086' }}
-                      >
-                        {t.speed}%
-                      </div>
-                      <div className={`text-xs ${isActive ? 'text-text' : 'text-overlay'}`}>
-                        {t.label}
-                      </div>
-                      <div className="text-xs text-overlay">
-                        {i === 0 ? '<5' : i === 3 ? '>25' : `${autoThresholds[i-1]?.max || 0}-${t.max}`}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+              <button
+                className="block bg-mantle rounded-xl p-3 w-full cursor-pointer hover:ring-1 hover:ring-surface-1 transition-all"
+                onClick={() => onMetricClick?.('fan_auto_mode')}
+              >
+                {/* Target speed with ramping indicator */}
+                <div className="flex items-center justify-center gap-1.5 mb-2">
+                  <span
+                    className="text-lg font-bold tabular-nums"
+                    style={{ color: interpolateGradient(pm25Fraction) }}
+                  >
+                    {targetSpeed}%
+                  </span>
+                  {isRamping && (
+                    <span className="text-xs text-overlay animate-pulse">
+                      {currentSpeed < targetSpeed ? '\u2191' : '\u2193'} {currentSpeed}%
+                    </span>
+                  )}
+                </div>
+
+                {/* Gradient bar */}
+                <div className="relative h-3 mb-2">
+                  <div className="absolute inset-0 rounded-full overflow-hidden"
+                    style={{ background: `linear-gradient(to right, ${gradientColors.join(', ')})` }}
+                  />
+                  {/* Position marker (outside overflow-hidden so it's not clipped) */}
+                  <div
+                    className="absolute top-1/2 -translate-y-1/2 w-3.5 h-3.5 rounded-full border-2 border-base shadow-md transition-[left] duration-300"
+                    style={{
+                      left: `calc(${pm25Fraction * 100}% - 7px)`,
+                      background: interpolateGradient(pm25Fraction),
+                    }}
+                  />
+                </div>
+
+                {/* Scale labels */}
+                <div className="flex justify-between text-xs text-overlay">
+                  <span>5 µg/m³ (25%)</span>
+                  <span>35 µg/m³ (100%)</span>
+                </div>
+              </button>
             </div>
           )}
 
@@ -620,7 +663,13 @@ export default function FanControl() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* PWM vs RPM Curve */}
         <Card className="p-4 sm:p-6 border-surface-1">
-          <h3 className="text-sm font-medium text-text mb-1">PWM vs RPM</h3>
+          <button
+            className="flex items-center gap-1.5 mb-1 cursor-pointer hover:text-blue transition-colors group"
+            onClick={() => onMetricClick?.('fan_speed')}
+          >
+            <h3 className="text-sm font-medium text-text group-hover:text-blue transition-colors">PWM vs RPM</h3>
+            <Info className="w-3.5 h-3.5 text-overlay group-hover:text-blue transition-colors" />
+          </button>
           <p className="text-xs text-overlay mb-4">Arctic P14 Pro @ 12V</p>
           <ResponsiveContainer width="100%" height={windowWidth < 640 ? 180 : 220}>
             <LineChart data={PWM_CURVE_DATA} title="Fan PWM to RPM response curve" margin={{ top: 10, right: 10, bottom: 15, left: -10 }}>
@@ -715,7 +764,13 @@ export default function FanControl() {
 
         {/* PQ Curve */}
         <Card className="p-4 sm:p-6 border-surface-1">
-          <h3 className="text-sm font-medium text-text mb-1">Pressure vs Airflow</h3>
+          <button
+            className="flex items-center gap-1.5 mb-1 cursor-pointer hover:text-blue transition-colors group"
+            onClick={() => onMetricClick?.('fan_pq_curve')}
+          >
+            <h3 className="text-sm font-medium text-text group-hover:text-blue transition-colors">Pressure vs Airflow</h3>
+            <Info className="w-3.5 h-3.5 text-overlay group-hover:text-blue transition-colors" />
+          </button>
           <p className="text-xs text-overlay mb-4">Performance at {rpm > 0 ? `${Math.round((rpm / 2472) * 100)}%` : 'max'} speed</p>
           <ResponsiveContainer width="100%" height={windowWidth < 640 ? 180 : 220}>
             <LineChart data={PQ_CURVE_DATA} title="Fan pressure versus airflow curve" margin={{ top: 10, right: 10, bottom: 15, left: -10 }}>

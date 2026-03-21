@@ -1120,7 +1120,7 @@ esp_err_t sen55_start_fan_cleaning(void)
     return ret;
 }
 
-bool sen55_check_fan_cleaning(uint32_t current_unix_time)
+bool sen55_check_fan_cleaning(uint64_t current_unix_time)
 {
     if (!initialized || current_unix_time == 0) {
         return false;
@@ -1132,17 +1132,17 @@ bool sen55_check_fan_cleaning(uint32_t current_unix_time)
         return false;
     }
 
-    uint32_t last_clean = 0;
-    nvs_get_u32(nvs, NVS_KEY_LAST_CLEAN, &last_clean);
+    uint64_t last_clean = 0;
+    nvs_get_u64(nvs, NVS_KEY_LAST_CLEAN, &last_clean);
 
     bool needed = (last_clean == 0) || (current_unix_time - last_clean >= 604800);
 
     if (needed) {
-        ESP_LOGI(TAG, "Fan cleaning needed (last: %lus ago)",
-                 last_clean ? (unsigned long)(current_unix_time - last_clean) : 0);
+        ESP_LOGI(TAG, "Fan cleaning needed (last: %llus ago)",
+                 last_clean ? (unsigned long long)(current_unix_time - last_clean) : 0ULL);
         ret = sen55_start_fan_cleaning();
         if (ret == ESP_OK) {
-            nvs_set_u32(nvs, NVS_KEY_LAST_CLEAN, current_unix_time);
+            nvs_set_u64(nvs, NVS_KEY_LAST_CLEAN, current_unix_time);
             nvs_commit(nvs);
         }
     }

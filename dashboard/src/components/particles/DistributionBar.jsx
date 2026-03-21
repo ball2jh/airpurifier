@@ -1,7 +1,9 @@
 import { useMemo } from 'react';
 import { computeDifferentialBins } from '@/utils/particleSource';
 
-export default function DistributionBar({ pmNumber }) {
+const BIN_METRIC_KEYS = ['nc_pm05', 'nc_pm10_nc', 'nc_pm25', 'nc_pm40', 'nc_pm100'];
+
+export default function DistributionBar({ pmNumber, onMetricClick }) {
   const bins = useMemo(() => computeDifferentialBins(pmNumber), [pmNumber]);
 
   const { total, percentages } = useMemo(() => {
@@ -58,7 +60,11 @@ export default function DistributionBar({ pmNumber }) {
       {/* Bin labels — all 5 bins always shown for context */}
       <div className="flex mt-3 gap-1">
         {bins.map((bin, i) => (
-          <div key={i} className="flex-1 text-center">
+          <button
+            key={i}
+            className="flex-1 text-center rounded-lg py-1 transition-colors hover:bg-surface-1 cursor-pointer"
+            onClick={() => onMetricClick?.(BIN_METRIC_KEYS[i])}
+          >
             <div className="flex items-center justify-center gap-1">
               <span
                 className="w-2 h-2 rounded-full shrink-0"
@@ -71,7 +77,7 @@ export default function DistributionBar({ pmNumber }) {
             <p className={`text-base tabular-nums mt-0.5 ${percentages[i] > 0 ? 'text-subtext' : 'text-overlay/40'}`}>
               {bin.count.toFixed(0)}
             </p>
-          </div>
+          </button>
         ))}
       </div>
     </div>
